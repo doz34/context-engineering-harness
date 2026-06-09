@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# CE-Harness POV Demo
+# Runs end-to-end demo: init, measure baseline vs harness, show ledger.
+
+set -e
+cd "$(dirname "$0")/.."
+
+echo "═══════════════════════════════════════════════════════════════"
+echo "  CE-Harness POV Demo"
+echo "  Context Engineering — 3× economy demonstration"
+echo "═══════════════════════════════════════════════════════════════"
+echo ""
+
+# Clean previous demo state
+rm -rf .ctxh-demo
+
+# Step 1: Init
+echo "▶ Step 1: Initialize harness"
+./bin/ctxh init --path .ctxh-demo
+echo ""
+
+# Step 2: Measure
+echo "▶ Step 2: Measure baseline vs with-harness"
+./bin/ctxh measure
+echo ""
+
+# Step 3: Spawn a subagent with valid brief
+echo "▶ Step 3: Spawn subagent (firewall pattern)"
+./bin/ctxh spawn --phase P_TEST \
+  --brief "OBJECT:Find all call sites of parse_query in the codebase;;FORMAT:JSON: {file:str,line:int,code:str}[];;TOOLS:grep,read;;BOUND:max 20 results, no file modifications"
+echo ""
+
+# Step 4: Show ledger
+echo "▶ Step 4: Token ledger summary"
+./bin/ctxh ledger
+echo ""
+
+echo "═══════════════════════════════════════════════════════════════"
+echo "  ✅ Demo complete. See .ctxh-demo/ for state."
+echo "═══════════════════════════════════════════════════════════════"

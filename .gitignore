@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Local state files
+.ctxh/
+.ctxh-demo/
+*.db
+*.db.master
+*.salt
+
+# Secrets (should NEVER be committed)
+*.key
+.env
+secrets.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+*.egg
