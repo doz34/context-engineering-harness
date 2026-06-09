@@ -1,37 +1,37 @@
-# Analyse Adversariale par Phase — 2026-06-08
+# Adversarial Analysis per Phase — 2026-06-08
 
-> **Type** : Red Team (mode attack), pas compliance.
-> **Cible** : CE-Harness POV (post-S2), 11 phases (P0-P10 + POV lui-même)
-> **Méthodologie** : 4 classes d'attaquants × 5 vecteurs cross-phase = matrice 20 attaques
-> **But** : Identifier les angles morts AVANT qu'un vrai attaquant les trouve
-
----
-
-## 0. Modèle d'adversaire — 4 classes
-
-| Classe | Profil | Objectif | Outils probables |
-|--------|--------|----------|------------------|
-| **A1 — Externe** | Attaquant via prompt injection, MCP malicieux, supply chain | Vol de données, exfiltration, prise de contrôle | Indirect prompt injection, tool poisoning, typosquatting |
-| **A2 — Interne** | Process compromis, état corrompu, race condition | Corruption du state, HMAC chain break, DoS | SQL injection (SQLite WAL), state.db race, hash collision |
-| **A3 — Logique** | Edge cases du POV, invariants mal compris, mal-compréhension | Faire passer du faux pour vrai, abus de token budget | DSL ambigu, brief subagent vague, type confusion |
-| **A4 — Temporel** | Long-running, drift, decay, état partagé cross-session | Vol de session, replay attack, drift de comportement | Session hijack, replay d'audit, slow-burn data exfil |
+> **Type**: Red Team (attack mode), not compliance.
+> **Target**: CE-Harness POV (post-S2), 11 phases (P0-P10 + POV itself)
+> **Methodology**: 4 classes of attackers × 5 cross-phase vectors = 20-attack matrix
+> **Goal**: Identify blind spots BEFORE a real attacker finds them
 
 ---
 
-## 1. Catalogue des 20 vecteurs d'attaque cross-phase
+## 0. Threat model — 4 classes
 
-| ID | Vecteur | Classe | Phase(s) touchée(s) |
-|----|---------|--------|---------------------|
-| V01 | Indirect prompt injection via tool result | A1 | P3, P5, P6 |
-| V02 | MCP server malicieux (typosquatting, supply chain) | A1 | P5, P6, P7 |
+| Class | Profile | Goal | Likely tools |
+|-------|---------|------|--------------|
+| **A1 — External** | Attacker via prompt injection, malicious MCP, supply chain | Data theft, exfiltration, takeover | Indirect prompt injection, tool poisoning, typosquatting |
+| **A2 — Internal** | Compromised process, corrupted state, race condition | State corruption, HMAC chain break, DoS | SQL injection (SQLite WAL), state.db race, hash collision |
+| **A3 — Logic** | Edge cases of POV, invariants misunderstood, type confusion | Pass fake for true, abuse token budget | DSL ambiguity, vague subagent brief, type confusion |
+| **A4 — Temporal** | Long-running, drift, decay, cross-session shared state | Session hijack, replay attack, slow-burn data exfil | Session hijack, audit replay, slow-burn data exfil |
+
+---
+
+## 1. Catalog of 20 cross-phase attack vectors
+
+| ID | Vector | Class | Phase(s) touched |
+|----|--------|--------|------------------|
+| V01 | Indirect prompt injection via tool_result | A1 | P3, P5, P6 |
+| V02 | Malicious MCP server (typosquatting, supply chain) | A1 | P5, P6, P7 |
 | V03 | HMAC chain forgery / replay | A2 | P8, P9, P10 |
-| V04 | SQLite WAL corruption / lock contention | A2 | Toutes |
+| V04 | SQLite WAL corruption / lock contention | A2 | All |
 | V05 | State.db race condition (TOCTOU) | A2 | P3, P4 |
-| V06 | DSL ambiguity (parsing collision) | A3 | Toutes |
-| V07 | Brief subagent vague → exfiltration scope | A3 | P3, P4, P5 |
-| V08 | Token counter inflation (game the budget) | A3 | Toutes |
+| V06 | DSL ambiguity (parsing collision) | A3 | All |
+| V07 | Vague subagent brief → exfiltration scope | A3 | P3, P4, P5 |
+| V08 | Token counter inflation (game the budget) | A3 | All |
 | V09 | Type confusion (memory block attack) | A3 | P3, P4 |
-| V10 | Lost-in-the-middle exploitation (cache key in middle) | A3 | Toutes |
+| V10 | Lost-in-the-middle exploitation (cache key in middle) | A3 | All |
 | V11 | Session hijack via state.db (no auth) | A4 | P0-P10 |
 | V12 | Long-running decay (35 min wall edge case) | A4 | P3, P5 |
 | V13 | Replay of compaction results (collision) | A4 | P4 |
@@ -41,296 +41,296 @@
 | V17 | PII tokenization bypass (false negative) | A1 | P5, P6 |
 | V18 | Sandbox escape via dunder attribute | A2 | P5 |
 | V19 | Hook bypass via direct call (not through PostToolUse) | A2 | P5, P6 |
-| V20 | Token ledger inflation (artificially count tokens) | A3 | Toutes |
+| V20 | Token ledger inflation (artificially count tokens) | A3 | All |
 
 ---
 
-## 2. Analyse adversariale par phase (P0 → P10 + POV)
+## 2. Adversarial analysis per phase (P0 → P10 + POV)
 
 ### P0_DISCOVERY
 
-**Vecteurs applicables** : V11 (session hijack), V20 (ledger inflation)
+**Applicable vectors**: V11 (session hijack), V20 (ledger inflation)
 
-**Angles d'attaque** :
-1. **Session ID predictability** : si on génère `session_id` prévisiblement (timestamp, hash faible), un attaquant peut l'injecter dans `state.db` et voler l'état
-2. **State DB pas chiffré** : `state.db` en clair, contient les décisions utilisateur (PII potentielle : noms de projets, choix)
-3. **Pas d'authentification de session** : n'importe qui ayant accès au filesystem peut ouvrir `.swebok_state.db`
-4. **Metadata leakage** : `metadata` field de session peut contenir des secrets sans warning
-5. **No key rotation policy** : `.audit_key` jamais rotaté
+**Attack angles**:
+1. **Session ID predictability**: if we generate `session_id` predictably (timestamp, weak hash), an attacker can inject it into `state.db` and steal the state
+2. **State DB pas chiffré**: `state.db` in clear, contains user décisions (potential PII: project names, choices)
+3. **No session authentication**: anyone with filesystem access can open `.swebok_state.db`
+4. **Metadata leakage**: `metadata` field of session may contain secrets without warning
+5. **No key rotation policy**: `.audit_key` never rotated
 
-**Likelihood** : LOW (accès filesystem requis)
-**Impact** : MED (vol de décisions, pas d'exfiltration LLM directe)
-**Quick win** : chiffrer `state.db` au repos (sqlite3 SEE ou LUKS container)
+**Likelihood**: LOW (filesystem access required)
+**Impact**: MED (decision theft, not direct LLM exfiltration)
+**Quick win**: Encrypt `state.db` at rest (sqlite3 SEE or LUKS container)
 
 ### P1_CONCEPT_FEASIBILITY
 
-**Vecteurs applicables** : V11, V20
+**Applicable vectors**: V11, V20
 
-**Angles d'attaque** :
-1. **Charter falsifiable** : `CHARTER.md` est markdown lisible, un attaquant avec accès au repo peut réécrire la mission
-2. **Cadrage scope drift** : la phase P1 a 4 agents séquentiels (rotation 3 Nexus + T2=Discovery-Orch) — l'attaquant peut influencer l'agent T1 pour élargir le scope
-3. **Decision threshold abusable** : "décision triviale = silencieuse" (DTM B threshold) → un attaquant peut noyer des décisions importantes dans le bruit
-4. **Corpus 20% accepté** : si l'attaquant pollue les 20% retenus, il influence Discovery
-5. **Pas de versionning du charter** : modifications invisibles
+**Attack angles**:
+1. **Charter falsifiable**: `CHARTER.md` is human-readable markdown, an attacker with repo access can rewrite the mission
+2. **Scope drift attack**: phase P1 has 4 sequential agents (rotation 3 Nexus + T2=Discovery-Orch) — attacker can influence agent T1 to enlarge scope
+3. **Decision threshold abusable**: "trivial decision = silent" (DTM B threshold) → attacker can drown important décisions in noise
+4. **Corpus 20% accepted**: if attacker pollutes the 20% retained, it influences Discovery
+5. **No versionning of charter**: modifications invisible
 
-**Likelihood** : MED
-**Impact** : LOW (P1 = exploration, pas exécution)
-**Quick win** : HMAC le charter + versionning Git (déjà natif)
+**Likelihood**: MED
+**Impact**: LOW (P1 = exploration, not execution)
+**Quick win**: HMAC charter + Git versioning (already native)
 
 ### P2_REQUIREMENTS
 
-**Vecteurs applicables** : V11, V20, V09 (type confusion dans SRS)
+**Applicable vectors**: V11, V20, V09 (type confusion in SRS)
 
-**Angles d'attaque** :
-1. **SRS IEEE 830 ambigu** : 17 attributs qualité ISO 25010 → attaquant peut créer une spec volontairement ambiguë qui sera "passée" par T2 spec-compliance
-2. **NFR ordering attack** : si NFR perf=high et security=low, l'architecte peut prioriser perf au détriment de security
-3. **Acceptance criteria flous** : un AC "system should be fast" est non-mesurable → un attaquant peut livrer n'importe quoi et T2 ne peut que PASS
-4. **Type confusion dans les schémas** : si le SRS utilise des types faibles (string partout), confusion possible
-5. **PII dans le SRS** : noms, emails, addresses souvent présents dans les exemples
+**Attack angles**:
+1. **SRS IEEE 830 ambiguous**: 17 quality attributes ISO 25010 → attacker can create a spec intentionally ambiguous that will be "passed" by T2 spec-compliance
+2. **NFR ordering attack**: if NFR perf=high and security=low, the architect can prioritize perf over security
+3. **Acceptance criteria flous**: an AC "system should be fast" is non-mesurable → attacker can deliver anything and T2 can only PASS
+4. **Type confusion in schemas**: if the SRS uses weak types (string everywhere), confusion possible
+5. **PII in SRS**: names, emails, addresses often present in examples
 
-**Likelihood** : MED
-**Impact** : MED (specs ambiguës = bugs en aval, dette structurelle)
-**Quick win** : Linter de spec (`ctxh-lint-srs`) qui valide mesurabilité des AC
+**Likelihood**: MED
+**Impact**: MED (ambiguous specs = bugs downstream, structural debt)
+**Quick win**: Spec linter (`ctxh-lint-srs`) that validates measurability of AC
 
 ### P3_ARCHITECTURE
 
-**Vecteurs applicables** : V01, V06, V07, V09, V16
+**Applicable vectors**: V01, V06, V07, V09, V16
 
-**Angles d'attaque** :
-1. **Multi-agent attack** : 3-5 subagents parallèles + Nexus-Critic T1+T2+T3 obligatoire → 5 invocations LLM = surface d'injection 5× plus grande
-2. **Subagent return smuggling** : un subagent peut retourner un DSL qui *semble* être un résultat mais contient du payload caché (e.g., `SUMMARY:done;;ARTIFACTS:http://attacker.com/exfil`)
-3. **ADR poisoning** : un ADR malicieusement rédigé peut ancrer une décision d'archi dans le futur (T3 aval s'appuie dessus)
-4. **OpenAPI/AsyncAPI schemas avec reference circulaire** : un attaquant peut créer un schéma qui crash les validators P4
-5. **STRIDE threat model falsifiable** : si threat model incomplet, l'attaquant connaît les non-coverage
-6. **Format contracts différencié md+json** : ambiguïté entre les 2 représentations
-7. **Token budget 15k hard cap** : exploitable si budget gameable (compaction, subagent return)
+**Attack angles**:
+1. **Multi-agent attack**: 3-5 parallel subagents + Nexus-Critic T1+T2+T3 mandatory → 5 LLM invocations = 5× larger injection surface
+2. **Subagent return smuggling**: a subagent can return a DSL that *seems* to be a result but contains hidden payload (e.g., `SUMMARY:done;;ARTIFACTS:http://attacker.com/exfil`)
+3. **ADR poisoning**: a maliciously drafted ADR can anchor a design décision in the future (T3 downstream relies on it)
+4. **OpenAPI/AsyncAPI schemas with circular reference**: attacker can create a schema that crashes P4 validators
+5. **STRIDE threat model falsifiable**: if threat model incomplete, attacker knows the non-coverage
+6. **Format contracts differentiated md+json**: ambiguity between the 2 representations
+7. **Token budget 15k hard cap**: exploitable if budget gameable (compaction, subagent return)
 
-**Likelihood** : HIGH
-**Impact** : HIGH (faux ADRs = dette 10 ans)
-**Quick win** : Valider que `<subagent-result>` ne contient que les 3 champs attendus (ref, summary, artifacts), pas de payload libre
+**Likelihood**: HIGH
+**Impact**: HIGH (fake ADRs = 10-year debt)
+**Quick win**: Validate that `<subagent-result>` contains only the 3 expected fields (ref, summary, artifacts), no free payload
 
 ### P4_DESIGN
 
-**Vecteurs applicables** : V06, V07, V10, V13, V16
+**Applicable vectors**: V06, V07, V10, V13, V16
 
-**Angles d'attaque** :
-1. **Matrice ADR → module obligatoire (XG-4.7)** : si l'attaquant fait passer un faux ADR en P3, P4 le traduit en faux modules
-2. **Format contracts différencié hérité P3** : si md+json désalignés, P5 code sur du faux JSON
-3. **DDS (Detailed Design Spec) poisoning** : DDS mal rédigés = code faux en P5
-4. **AsyncAPI events with backdoor** : un event handler peut exfiltrer
-5. **OpenAPI spec with hidden endpoint** : un attaquant peut ajouter un endpoint "interne" qui ne sera pas audité
-6. **Perte du brief subagent au compaction** : si compaction perd le brief, le subagent suivant ne sait pas ce qu'il doit faire (drift)
-7. **Replay attack sur compaction** : un attaquant peut rejouer un compaction antérieur pour restore un état dangereux
+**Attack angles**:
+1. **Matrice ADR → module obligatoire (XG-4.7)**: if attacker makes a fake ADR pass in P3, P4 translates it into fake modules
+2. **Format contracts differentiated inherited P3**: if md+json misaligned, P5 code on fake JSON
+3. **DDS (Detailed Design Spec) poisoning**: DDS written poorly = fake code in P5
+4. **AsyncAPI events with backdoor**: an event handler can exfiltrate
+5. **OpenAPI spec with hidden endpoint**: attacker can add an "internal" endpoint that won't be audited
+6. **Perte du brief subagent au compaction**: if compaction loses the brief, next subagent doesn't know what to do (drift)
+7. **Replay attack on compaction**: attacker can replay a previous compaction to restore a dangerous state
 
-**Likelihood** : HIGH
-**Impact** : HIGH (code faux = exploit en prod)
-**Quick win** : Validation XSD des OpenAPI/AsyncAPI, rejeeter les endpoints non documentés
+**Likelihood**: HIGH
+**Impact**: HIGH (fake code = exploit in prod)
+**Quick win**: XSD validation of OpenAPI/AsyncAPI, reject undocumented endpoints
 
 ### P5_IMPLEMENTATION
 
-**Vecteurs applicables** : V01, V02, V08, V17, V18, V19
+**Applicable vectors**: V01, V02, V08, V17, V18, V19
 
-**Angles d'attaque** :
-1. **Code injection via MCP** : si un dev ajoute un MCP `github-mcp-server` non signé, l'attaquant peut l'utiliser pour exfiltrer
-2. **Tool result PII leakage** : un tool_result peut contenir des emails/phones non tokenizables (mon regex est limitatif)
-3. **Sandbox escape via dunder** : `().__class__.__subclasses__()` peut bypass le AST check
-4. **Code API filesystem traversal** : si `servers/` directory a des chemins avec `..`, l'attaquant peut lire hors scope
-5. **Hook bypass** : si le dev appelle `tool_result` directement sans passer par le hook, le hook ne s'exécute pas
-6. **Token ledger manipulation** : un dev peut forger des events dans `state.db` pour gonfler le compteur
-7. **Pre-hydrate poisoning** : un attaquant peut pré-charger du contenu malicieux dans le `state.db` au début de phase
-8. **Compaction ACE "self-improving" peut apprendre le mal** : si une mauvaise décision est "accepted" (gate OK par erreur), elle est renforcée
+**Attack angles**:
+1. **Code injection via MCP**: if dev adds an un-signed `github-mcp-server`, attacker can use it to exfiltrate
+2. **Tool result PII leakage**: tool_result may contain non-tokenizable emails/phones (our regex is limited)
+3. **Sandbox escape via dunder**: `().__class__.__subclasses__()` can bypass the AST check
+4. **Code API filesystem traversal**: if `servers/` directory has paths with `..`, attacker can read out of scope
+5. **Hook bypass**: if dev calls `tool_result` directly without going through the hook, hook doesn't run
+6. **Token ledger manipulation**: dev can forge events in `state.db` to inflate the counter
+7. **Pre-hydrate poisoning**: attacker can pre-load malicious content in `state.db` at phase start
+8. **Compaction ACE "self-improving" can learn the bad**: if a bad décision is "accepted" (gate OK by mistake), it is reinforced
 
-**Likelihood** : HIGH
-**Impact** : CRIT (code en prod, RCE possible)
-**Quick wins** :
+**Likelihood**: HIGH
+**Impact**: CRIT (code in prod, RCE possible)
+**Quick wins**:
 - Force hook execution via wrapper (`@with_hooks` decorator)
-- Validation signature des MCP servers au boot
-- Sandboxing OS-level (Docker) en plus de l'AST check
+- Validation signature of MCP servers at boot
+- Sandboxing OS-level (Docker) in addition to AST check
 
 ### P6_TESTING
 
-**Vecteurs applicables** : V01, V02, V08, V17, V20
+**Applicable vectors**: V01, V02, V08, V17, V20
 
-**Angles d'attaque** :
-1. **Tests générés par LLM qui passent en validant du faux** : `mut.==None → True` est un test bidon mais qui PASS
-2. **Coverage spoofing** : un attaquant peut marquer des lignes "covered" sans les tester réellement
-3. **Mutation testing bypass** : si on ne mute que les conditions triviales, des bugs logiques survivent
-4. **Test fixtures with PII** : un fichier `tests/fixtures/users.json` peut contenir 1000 PII en clair
-5. **Adversarial gate `QA-FAIL` ignoré** : si l'orchestrateur force le PASS malgré QA-FAIL, on a un faux PASS
-6. **Defect catalog poisoning** : un attaquant peut injecter un faux "defect closed" pour fermer un bug réel
+**Attack angles**:
+1. **Tests generated by LLM that pass by validating fake**: `mut.==None → True` is a fake test but PASSes
+2. **Coverage spoofing**: attacker can mark lines "covered" without really testing them
+3. **Mutation testing bypass**: if we only mutate trivial conditions, logical bugs survive
+4. **Test fixtures with PII**: a `tests/fixtures/users.json` file may contain 1000 PII in clear
+5. **Adversarial gate `QA-FAIL` ignored**: if orchestrator forces PASS despite QA-FAIL, we have a fake PASS
+6. **Defect catalog poisoning**: attacker can inject a fake "defect closed" to close a real bug
 
-**Likelihood** : MED
-**Impact** : HIGH (bug non détecté → prod)
-**Quick win** : Mutation testing obligatoire (pas seulement coverage), coverage = 0 si mut_score < 0.7
+**Likelihood**: MED
+**Impact**: HIGH (bug not detected → prod)
+**Quick win**: Mutation testing mandatory (not only coverage), coverage = 0 if mut_score < 0.7
 
 ### P7_DEPLOYMENT
 
-**Vecteurs applicables** : V02, V04, V11
+**Applicable vectors**: V02, V04, V11
 
-**Angles d'attaque** :
-1. **CI/CD pipeline poisoning** : un attaquant peut compromettre GitHub Actions / GitLab CI
-2. **Container image poisoning** : si on pull un image Docker sans vérifier le hash SHA256
-3. **Secret leakage in env vars** : ANTHROPIC_API_KEY visible dans `ps auxe` ou logs
-4. **Hotfix bypass** : "hotfix = pas de bypass process complet obligatoire" mais en pratique le dev peut skip QA
-5. **Rollback attack** : l'attaquant peut rollback vers une version compromise
-6. **Region failover data corruption** : si multi-region, le state.db peut diverger
+**Attack angles**:
+1. **CI/CD pipeline poisoning**: attacker can compromise GitHub Actions / GitLab CI
+2. **Container image poisoning**: if we pull a Docker image without verifying the SHA256 hash
+3. **Secret leakage in env vars**: ANTHROPIC_API_KEY visible in `ps auxe` or logs
+4. **Hotfix bypass**: "hotfix = no bypass process complet obligatoire" but in practice dev can skip QA
+5. **Rollback attack**: attacker can rollback to a compromised version
+6. **Region failover data corruption**: if multi-region, the state.db can diverge
 
-**Likelihood** : HIGH
-**Impact** : CRIT (prod compromise, données exfiltrées)
-**Quick win** : Hash pinning des Docker images, secrets via vault (pas env vars)
+**Likelihood**: HIGH
+**Impact**: CRIT (prod compromise, data exfiltrated)
+**Quick win**: Hash pinning of Docker images, secrets via vault (not env vars)
 
 ### P8_OPERATIONS
 
-**Vecteurs applicables** : V03, V04, V11, V12, V15
+**Applicable vectors**: V03, V04, V11, V12, V15
 
-**Angles d'attaque** :
-1. **HMAC chain break silencieux** : si l'attaquant modifie `state.db` et recalcule le HMAC, la chaîne ne casse pas (si l'attaquant a la clé)
-2. **Audit replay** : rejouer un audit log ancien pour cacher une action malveillante récente
-3. **35 min wall exploit** : juste avant 35 min, l'agent peut faire une action rapide non-observée
-4. **Post-mortem falsification** : si RCA est écrit après l'incident, il peut omettre des causes
-5. **SLO drift** : si l'attaquant manipule les seuils SLO, les alertes ne se déclenchent pas
-6. **Capacity overflow DoS** : remplir le state.db avec des events factices
+**Attack angles**:
+1. **HMAC chain break silencieux**: if attacker modifies `state.db` and recalculates the HMAC, the chain doesn't break (if attacker has the key)
+2. **Audit replay**: replay an old audit log to hide a recent malicious action
+3. **35 min wall exploit**: just before 35 min, agent can do a quick un-observed action
+4. **Post-mortem falsification**: if RCA is written after the incident, it can omit causes
+5. **SLO drift**: if attacker manipulates the SLO thresholds, alerts don't fire
+6. **Capacity overflow DoS**: fill the state.db with fake events
 
-**Likelihood** : MED
-**Impact** : CRIT (détection tardive)
-**Quick win** : Audit chain rotation (HMAC key dérivée du temps, forward secrecy), monitoring out-of-band
+**Likelihood**: MED
+**Impact**: CRIT (late detection)
+**Quick win**: Audit chain rotation (HMAC key derived from time, forward secrecy), monitoring out-of-band
 
 ### P9_MAINTENANCE
 
-**Vecteurs applicables** : V02, V03, V14, V15
+**Applicable vectors**: V02, V03, V14, V15
 
-**Angles d'attaque** :
-1. **CAB approval bypass** : si la décision CAB est juste un log, l'attaquant peut CAB-approve son propre patch
-2. **Memory block pollution** : un attaquant peut écrire dans `memory_blocks` des "facts" faux qui seront recallés
-3. **Patch injection** : un patch peut inclure un "covert channel" (variables d'environnement exotiques)
-4. **Playbook ACE reinforcement** : un playbook mal noté positivement peut être réutilisé en boucle
-5. **Cross-tenant leak** : si le harness est multi-tenant, un tenant peut lire le state d'un autre
-6. **Post-mortem data exfiltration** : les RCA contiennent souvent des données sensibles
+**Attack angles**:
+1. **CAB approval bypass**: if CAB décision is just a log, attacker can CAB-approve their own patch
+2. **Memory block pollution**: attacker can write fake "facts" in `memory_blocks` that will be recalled
+3. **Patch injection**: a patch may include a "covert channel" (exotic environment variables)
+4. **Playbook ACE reinforcement**: a malicious playbook positively rated can be reused in loop
+5. **Cross-tenant leak**: if the harness is multi-tenant, a tenant can read another tenant's state
+6. **Post-mortem data exfiltration**: RCAs often contain sensitive data
 
-**Likelihood** : MED
-**Impact** : HIGH (vulnérabilités récurrentes)
-**Quick win** : ACL sur `memory_blocks` table, CAB approver list immuable
+**Likelihood**: MED
+**Impact**: HIGH (recurring vulnerabilities)
+**Quick win**: ACL on `memory_blocks` table, CAB approver list immuable
 
 ### P10_RETIREMENT
 
-**Vecteurs applicables** : V03, V11, V15
+**Applicable vectors**: V03, V11, V15
 
-**Angles d'attaque** :
-1. **EOL decision manipulation** : si l'attaquant peut faire un faux EOL, il peut faire archiver du code non-compliant
-2. **Archive integrity** : l'archive de 30/90/180j read-only peut être copiée si filesystem compromis
-3. **Ownership transfer spoofing** : un attaquant peut transférer la propriété à une entité malveillante
-4. **Final archive snapshot with PII** : l'archive contient souvent des données utilisateur non anonymisées
-5. **Re-activation from archive** : un attaquant peut restaurer le projet avec ses vulnérabilités
-6. **Legal/compliance sign-off falsifiable** : si la signature est juste un log, falsifiable
+**Attack angles**:
+1. **EOL decision manipulation**: if attacker can do a fake EOL, they can archive non-compliant code
+2. **Archive integrity**: the 30/90/180j read-only archive can be copied if filesystem compromised
+3. **Ownership transfer spoofing**: attacker can transfer ownership to a malicious entity
+4. **Final archive snapshot with PII**: the archive often contains non-anonymized user data
+5. **Re-activation from archive**: attacker can restore the project with its vulnerabilities
+6. **Legal/compliance sign-off falsifiable**: if signature is just a log, falsifiable
 
-**Likelihood** : LOW (fin de vie = peu de valeur pour attaquant)
-**Impact** : HIGH (données legacy compromises)
-**Quick win** : Anonymisation de l'archive (GDPR Art. 17 = right to erasure respecté)
+**Likelihood**: LOW (end of life = little value for attacker)
+**Impact**: HIGH (legacy data compromised)
+**Quick win**: Archive anonymization (GDPR Art. 17 = right to erasure respected)
 
 ### POV (Sprint S1 + S2)
 
-**Vecteurs applicables** : V01, V04, V06, V07, V08, V11, V17, V18, V19, V20
+**Applicable vectors**: V01, V04, V06, V07, V08, V11, V17, V18, V19, V20
 
-**Angles d'attaque spécifiques au POV** :
-1. **Subagent firewall stub** : `_stub_execute` retourne des données fake → un dev peut prendre ce stub pour de la prod
-2. **State DB non chiffré** : `.swebok_state.db` contient tokens counter, peut leak les patterns d'usage
-3. **Token ledger forgeable** : un test peut injecter des events fake dans `state.db` sans validation
-4. **DSL parser permissif** : `KEY:VALUE;;KEY:VALUE` ne valide pas les types (string partout) → type confusion possible
-5. **PII patterns incomplets** : 11 patterns c'est <50% des PII réelles (manque : adresses postales, noms complets, plaques d'immat, etc.)
-6. **Sandbox defense in depth = AST only** : pas d'OS-level isolation → un code agent peut faire `subprocess.run` indirect
-7. **Hooks globaux stateful** : `_global_hooks` partage l'état entre tests → fuite cross-test
-8. **74 tests mais aucune test d'ADVERSARIAL** : tous les tests sont "happy path", aucun test "que se passe-t-il si l'attaquant injecte X ?"
-9. **PII tokenization deterministe par session** : même sel = même token → si l'attaquant a 2 contexts, il peut corréler
-10. **HMAC chain partial** : `state.append_audit` existe mais pas testé end-to-end
-11. **Council Bridge simulée** : les verdicts sont simulés, pas adversariaux indépendants
-12. **`run_council_gates.sh` findings hardcodés** : un dev peut modifier le script pour passer les gates sans fix
+**Adversarial angles specific to POV**:
+1. **Subagent firewall stub**: `_stub_execute` returns fake data → a dev can take this stub for production
+2. **State DB non chiffré**: `.swebok_state.db` contains token counter, can leak usage patterns
+3. **Token ledger forgeable**: a test can inject fake events in `state.db` without validation
+4. **DSL parser permissif**: `KEY:VALUE;;KEY:VALUE` does not validate types (string everywhere) → type confusion possible
+5. **PII patterns incomplets**: 11 patterns is <50% of real PII (missing: postal addresses, full names, license plates, etc.)
+6. **Sandbox defense in depth = AST only**: no OS-level isolation → agent code can do indirect `subprocess.run`
+7. **Hooks globaux stateful**: `_global_hooks` shares state between tests → cross-test leak
+8. **74 tests but no ADVERSARIAL test**: all tests are "happy path", no test "what happens if attacker injects X?"
+9. **PII tokenization deterministe par session**: same salt = same token → if attacker has 2 contexts, can correlate
+10. **HMAC chain partial**: `state.append_audit` exists but not tested end-to-end
+11. **Council Bridge simulée**: verdicts are simulated, not independent adverse
+12. **`run_council_gates.sh` findings hardcodés**: a dev can modify the script to pass gates without fix
 
-**Likelihood** : MED-HIGH
-**Impact** : HIGH (ce POV devient le template de la v1.0)
+**Likelihood**: MED-HIGH
+**Impact**: HIGH (this POV becomes the template for v1.0)
 
 ---
 
 ## 3. Risk Matrix (Likelihood × Impact)
 
-| Phase | Top 3 risques | L | I | Score | Quick win prioritaire |
-|-------|---------------|---|---|-------|----------------------|
-| P0 Discovery | State DB non chiffré | LOW | MED | 2 | Chiffrement at rest |
-| P1 Feasibility | Decision threshold abusable | MED | LOW | 2 | Versionning charter |
-| P2 Requirements | AC non-mesurables | MED | MED | 4 | Linter SRS |
-| P3 Architecture | ADR poisoning | HIGH | HIGH | **9** | Validation brief subagent stricte |
-| P4 Design | Format contracts désalignés | HIGH | HIGH | **9** | XSD OpenAPI/AsyncAPI |
-| P5 Implementation | MCP poisoning, sandbox escape | HIGH | CRIT | **12** | Hash pinning MCP + Docker |
-| P6 Testing | Tests happy-path only | MED | HIGH | 6 | Mutation testing obligatoire |
-| P7 Deployment | CI/CD poisoning, secrets leakage | HIGH | CRIT | **12** | Vault pour secrets |
-| P8 Operations | HMAC chain break | MED | CRIT | **8** | Audit chain rotation |
+| Phase | Top 3 risks | L | I | Score | Quick win priority |
+|-------|---------------|---|---|-------|---------------------|
+| P0 Discovery | State DB non chiffré | LOW | MED | 2 | Encryption at rest |
+| P1 Feasibility | Decision threshold abusable | MED | LOW | 2 | Charter versioning |
+| P2 Requirements | AC non-mesurables | MED | MED | 4 | SRS linter |
+| P3 Architecture | ADR poisoning | HIGH | HIGH | **9** | Strict subagent brief validation |
+| P4 Design | Format contracts misalignés | HIGH | HIGH | **9** | XSD OpenAPI/AsyncAPI |
+| P5 Implementation | MCP poisoning + sandbox escape | HIGH | CRIT | **12** | Hash pinning MCP + Docker |
+| P6 Testing | Tests happy-path only | MED | HIGH | 6 | Mutation testing mandatory |
+| P7 Deployment | CI/CD poisoning, secrets leakage | HIGH | CRIT | **12** | Vault for secrets |
+| P8 Operations | HMAC chain break | MED | CRIT | 8 | Audit chain rotation |
 | P9 Maintenance | Memory block pollution | MED | HIGH | 6 | ACL memory_blocks |
-| P10 Retirement | Archive PII non anonymisée | LOW | HIGH | 4 | Anonymisation archive |
-| POV (S1+S2) | Tests happy-path, sandbox AST only, simulée | MED-HIGH | HIGH | **9** | Tests adversariaux + Docker |
+| P10 Retirement | Archive PII non anonymisée | LOW | HIGH | 4 | Archive anonymization |
+| POV itself | Tests happy-path, sandbox AST only, simulée | MED-HIGH | HIGH | **9** | Adversarial tests + Docker |
 
-**Risques CRITIQUES (Score ≥ 9)** :
+**CRITICAL risks (Score ≥ 9)**:
 1. **P5 Implementation** : MCP poisoning + sandbox escape
 2. **P7 Deployment** : CI/CD + secrets
 3. **P3-P4 Architecture/Design** : ADR/contract poisoning
-4. **POV lui-même** : pas de tests adversariaux
+4. **POV itself** : pas de tests adversariaux
 
 ---
 
-## 4. Patterns d'attaque récurrents (à outiller)
+## 4. Recurring attack patterns (to be tooled)
 
-| Pattern | Description | Fréquence | Outil proposé |
-|---------|-------------|-----------|---------------|
-| **State DB tampering** | Modification directe de `state.db` | 4 phases | ACL filesystem + audit chain cryptographique |
-| **Subagent smuggling** | Payload caché dans return contract | 3 phases | Schema validator `<subagent-result>` |
-| **MCP poisoning** | Server malicieux | 3 phases | MCP trust store (signing) |
-| **PII leakage** | Données personnelles non tokenizées | 3 phases | Pattern library étendue (50+ patterns) |
-| **Test gaming** | Tests qui passent en validant du faux | 2 phases | Mutation testing + property-based |
+| Pattern | Description | Frequency | Proposed tool |
+|---------|-------------|-----------|----------------|
+| **State DB tampering** | Direct modification of `state.db` | 4 phases | ACL filesystem + audit chain cryptographique |
+| **Subagent smuggling** | Hidden payload in return contract | 3 phases | Schema validator `<subagent-result>` |
+| **MCP poisoning** | Malicious server | 3 phases | MCP trust store (signing) |
+| **PII leakage** | Personal data non tokenizées | 3 phases | Pattern library étendue (50+ patterns) |
+| **Test gaming** | Tests that pass by validating fake | 2 phases | Mutation testing + property-based |
 | **DSL ambiguity** | Parse collision | 4 phases | Schema strict + type validation |
 
 ---
 
-## 5. Quick Wins (effort ≤ 1h, impact immédiat)
+## 5. Quick Wins (effort ≤ 1h, immediate impact)
 
-| Quick win | Effort | Impact | Phases couvertes |
-|-----------|--------|--------|------------------|
-| Chiffrement state.db (SEE) | 1h | MED | Toutes |
+| Quick win | Effort | Impact | Phases covered |
+|-----------|--------|--------|----------------|
+| State DB encryption (SEE) | 1h | MED | All |
 | Schema validator `<subagent-result>` | 1h | HIGH | P3, P4, P5 |
 | Linter SRS (AC mesurables) | 1h | MED | P2 |
-| Hash pinning MCP au boot | 1h | CRIT | P5, P6, P7 |
-| Audit chain rotation (forward secrecy) | 1h | CRIT | P8, P9, P10 |
+| Hash pinning MCP au boot | 1h | **CRIT** | P5, P6, P7 |
+| Audit chain rotation (forward secrecy) | 1h | **CRIT** | P8, P9, P10 |
 | Tests adversariaux (5 fichiers) | 2h | HIGH | POV → v1.0 |
-| Vault pour secrets (au lieu env vars) | 1h | CRIT | P7, P8 |
+| Vault for secrets (instead of env vars) | 1h | **CRIT** | P7, P8 |
 | XSD OpenAPI/AsyncAPI | 1h | HIGH | P3, P4, P5 |
 | Memory blocks ACL | 1h | MED | P9 |
-| Mutation testing obligatoire (P6) | 1h | HIGH | P6 |
+| Mutation testing mandatory (P6) | 1h | HIGH | P6 |
 
-**Total quick wins** : ~10h, couvre les 12 phases.
+**Total quick wins**: ~10h, covers the 12 phases.
 
 ---
 
-## 6. Dette structurelle (effort > 1 jour)
+## 6. Structural debt (effort > 1 day)
 
-| Item | Effort | Justification | Phase cible |
-|------|--------|---------------|-------------|
-| Docker sandbox (OS-level) | 2 jours | Defense in depth, vs AST only | S3 |
-| Vraie Council Bridge (agents nexus-*) | 3 jours | Reviewers indépendants, pas simulés | v1.0 |
-| Playbook ACE self-improving | 3 jours | Apprendre des décisions passées | S3 |
-| MemGPT memory blocks complet | 2 jours | Mémoire hiérarchique typée | S3 |
-| Audit chain rotation | 1 jour | Forward secrecy, replay impossible | S4 |
-| Multi-tenant isolation | 3 jours | Si commercialisé | v2.0 |
-| Adversarial test suite (50+ payloads) | 2 jours | Couvrir tous les vecteurs identifiés | S4 |
+| Item | Effort | Justification | Target phase |
+|------|--------|---------------|--------------|
+| Docker sandbox (OS-level) | 2 days | Defense in depth, vs AST only | S3 |
+| Real Council Bridge (agents nexus-*) | 3 days | Independent reviewers, not simulated | v1.0 |
+| Playbook ACE self-improving | 3 days | Learn from past decisions | S3 |
+| MemGPT memory blocks complete | 2 days | Hierarchical typed memory | S3 |
+| Audit chain rotation | 1 day | Forward secrecy, replay impossible | S4 |
+| Multi-tenant isolation | 3 days | If commercialisé | v2.0 |
+| Adversarial test suite (50+ payloads) | 2 days | Cover all identified vectors | S4 |
 
 ---
 
 ## 7. Verdict
 
-Le POV est **fonctionnellement valide** (10/10 gates, 74/74 tests) mais **adversarialement immature**. Les 4 risques critiques (score ≥ 9) sont :
+The POV is **fonctionnellement valide** (10/10 gates, 74/74 tests) but **adversarialement immature**. The 4 critical risks (score ≥ 9) are:
 1. P5 Implementation (sandbox + MCP)
 2. P7 Deployment (CI/CD + secrets)
 3. P3-P4 Architecture/Design (ADR/contract poisoning)
-4. POV lui-même (happy-path tests, sandbox AST only)
+4. POV itself (happy-path tests, sandbox AST only, simulée)
 
-**Recommandation** : avant de déclarer v1.0 production-ready, exécuter les 10 quick wins (~10h) qui couvrent 80% du risque adversarial. Les 7 items de dette structurelle (S3-S4) adressent les 20% restants.
+**Recommendation**: before declaring v1.0 production-ready, run the 10 quick wins (~10h) that cover 80% of adversarial risk. The 7 structural debt items (S3-S4) address the remaining 20%.
 
 ---
 
-*Analyse conduite 2026-06-08 par discovery-orchestrator. Mode Red Team. 12 phases, 50+ angles d'attaque identifiés, 10 quick wins priorisés.*
+*Analysis conducted 2026-06-08 by discovery-orchestrator. Red Team mode. 12 phases, 50+ attack angles identified, 10 quick wins prioritized.*

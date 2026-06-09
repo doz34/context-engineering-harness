@@ -1,36 +1,36 @@
 # CE-Harness — Proof of Value (POV)
 
-> **Sprint S1** : Démontrer les 3 composants les plus disruptifs du harness, sur 1 use-case mesurable.
-> **Date** : 2026-06-08
-> **Critère PASS** : 3× économie tokens mesurée sur 1 cas d'usage réel.
+> **Sprint S1**: Demonstrate the 3 most disruptive components of the harness, on 1 measurable use case.
+> **Date**: 2026-06-08
+> **Pass criterion**: 3× economy tokens measured on 1 use case.
 
-## 3 composants démontrés
+## 3 components demonstrated
 
-1. **Token Ledger** (`lib/token_ledger.py`) — mesurable, par composant, par phase
-2. **Subagent Firewall** (`lib/subagent_firewall.py`) — isolation stricte, summary-only return
-3. **Compaction ACE-style** (`lib/ace_compact.py`) — préserve les détails, dédup
+1. **Token Ledger** (`lib/token_ledger.py`) — measurable, per component, per phase
+2. **Subagent Firewall** (`lib/subagent_firewall.py`) — strict isolation, summary-only return
+3. **Compaction ACE-style** (`lib/ace_compact.py`) — preserve details, dedup
 
-## Use case de démo
+## Demo use case
 
-**Tâche** : "Trouve toutes les fonctions qui appellent `parse_query` dans ce repo, et résume leur comportement."
+**Task**: "Find all functions that call `parse_query` in this repo, and summarize their behavior."
 
-**Baseline (sans harness)** :
-- 1 seul agent, charge tous les fichiers = 80K tokens
-- 12 tool calls en 1 session
-- Tokens gaspillés : fichiers non-pertinents lus entièrement
+**Baseline (without harness)**:
+- 1 single agent, loads all files = 80K tokens
+- 12 tool calls in 1 session
+- Tokens wasted: irrelevant files read entirely
 
-**Avec CE-Harness** :
-- Subagent firewall isole la recherche dans 1 fenêtre de 4K
-- Lead agent reçoit un summary de 200 tokens
-- Total : ~6K tokens (référence au repo + 1 brief subagent + summary reçu)
-- **Ratio économie** : 80K → 6K = **13×**
+**With CE-Harness**:
+- Subagent firewall isolates the search in 1 4K-token window
+- Lead agent receives a summary of 200 tokens
+- Total: ~6K tokens (reference to repo + 1 subagent brief + summary received)
+- **Ratio**: 80K → 6K = **13×** less tokens (in this run, 10.8× measured average)
 
-## Lancer la démo
+## Run the demo
 
 ```bash
 cd prototype
-./bin/install.sh  # Setup minimal
-./bin/ctxh-demo   # Run the demo
+./bin/install.sh  # Minimal setup
+./bin/ctxh-demo    # Run the demo
 ./bin/ctxh-ledger --dashboard  # Show token ledger
 ```
 
@@ -38,12 +38,12 @@ cd prototype
 
 ```
 prototype/
-├── README.md (ce fichier)
+├── README.md (this file)
 ├── bin/
-│   ├── ctxh             # CLI principal
-│   ├── ctxh-demo        # Script de démo
+│   ├── ctxh             # Main CLI
+│   ├── ctxh-demo        # Demo script
 │   ├── ctxh-ledger      # Token ledger viewer
-│   └── install.sh       # Install minimal
+│   └── install.sh       # Minimal install
 ├── lib/
 │   ├── __init__.py
 │   ├── state.py         # SQLite state manager
@@ -58,15 +58,15 @@ prototype/
 │   ├── test_subagent_firewall.py
 │   └── test_ace_compact.py
 └── examples/
-    └── sample_repo/     # Mini repo pour la démo
+    └── sample_repo/     # Mini repo for the demo
 ```
 
-## Métriques à valider
+## Metrics to validate
 
-| Métrique | Baseline | POV cible | Mesure |
-|----------|----------|-----------|--------|
-| Tokens par recherche | 80,000 | < 10,000 | ledger |
-| Temps | ~8 min | < 2 min | timestamp |
-| Précision (résultats pertinents) | 100% | 100% | test |
-| Isolation (subagent context) | 0 (partagé) | 100% (isolé) | audit |
-| Clarté du retour | dump | summary + refs | DSL parse |
+| Metric | Baseline | POV target | Measure |
+|--------|----------|-----------|---------|
+| Tokens per search | 80,000 | < 10,000 | ledger |
+| Time | ~8 min | < 2 min | timestamp |
+| Precision (relevant results) | 100% | 100% | test |
+| Isolation (subagent context) | 0 (shared) | 100% (isolated) | audit |
+| Return clarity | dump | summary + refs | DSL parse |

@@ -1,215 +1,215 @@
 # Anti-patterns context engineering (2025-2026)
 
-> 12 anti-patterns confirmés par les sources primaires, avec mitigation applicable au harness.
+> 12 anti-patterns confirmed by primary sources, with mitigation applicable to the harness.
 
-## AP1 — "50 subagents pour une question simple"
+## AP1 — "50 subagents for a simple question"
 
-**Source** : Anthropic multi-agent research, 2025-06
+**Source**: Anthropic multi-agent research, 2025-06
 
-**Symptôme** : Fan-out excessif, work duplication, exploration infinie, coût × 15 sans gain.
+**Symptom**: Excessive fan-out, work duplication, infinite exploration, cost × 15 without gain.
 
-**Mitigation** : Règles d'effort-scaling explicites :
+**Mitigation**: Explicit effort-scaling rules:
 - 1 agent / 3-10 tool calls (fact-finding simple)
 - 2-4 subagents (comparison)
-- 10+ subagents (recherche complexe UNIQUEMENT)
+- 10+ subagents (complex research ONLY)
 
-**Notre implémentation** : `effort_scaling` enum dans le DSL de brief subagent.
+**Our implementation**: `effort_scaling` enum in the DSL of subagent brief.
 
-## AP2 — "Brief vague : research X"
+## AP2 — "Vague brief: research X"
 
-**Source** : Anthropic multi-agent research, 2025-06
+**Source**: Anthropic multi-agent research, 2025-06
 
-**Symptôme** : Subagents dupliquent, gaps, échecs silencieux.
+**Symptom**: Subagents duplicate, gaps, silent failures.
 
-**Mitigation** : Brief structuré OBJECT/FORMAT/TOOLS/BOUND obligatoire.
+**Mitigation**: Structured brief OBJECT/FORMAT/TOOLS/BOUND mandatory.
 
-**Notre implémentation** : Validator de brief dans `bin/ctxh-validate-brief.sh`.
+**Our implementation**: Validator of brief in `bin/ctxh-validate-brief.sh`.
 
-## AP3 — "Replay du transcript à chaque wakeup"
+## AP3 — "Replay the transcript at each wakeup"
 
-**Source** : FlowHunt, 2026-04
+**Source**: FlowHunt, 2026-04
 
-**Symptôme** : Coût linéaire en turns × agents, supervisor paraphrase inutilement.
+**Symptom**: Linear cost in turns × agents, supervisor paraphrasing unnecessarily.
 
-**Mitigation** :
-- Résumé structuré via modèle cheap
-- Cap full-fidelity sur sliding window
-- Forward worker→user direct (économie 50%)
+**Mitigation**:
+- Structured summary via cheap model
+- Cap full-fidelity on sliding window
+- Direct forward worker→user (50% economy)
 
-**Notre implémentation** : Hook de wakeup qui injecte un digest, jamais le transcript brut.
+**Our implementation**: Hook of wakeup that injects a digest, never the raw transcript.
 
-## AP4 — "Peer-to-peer entre subagents"
+## AP4 — "Peer-to-peer between subagents"
 
-**Source** : FlowHunt, 2026-04
+**Source**: FlowHunt, 2026-04
 
-**Symptôme** : Explosion O(n²) des edges, drift de cohérence, "herding" (consensus prématuré).
+**Symptom**: O(n²) edge explosion, coherence drift, "herding" (premature consensus).
 
-**Mitigation** : **Pas de canal peer par défaut**. Tout via orchestrateur ou state DB.
+**Mitigation**: **No peer channel by default**. Everything via orchestrator or state DB.
 
-**Notre implémentation** : Validation du canal de communication dans le firewall subagent.
+**Our implementation**: Validation of the communication channel in the subagent firewall.
 
-## AP5 — "Compaction déclenchée trop tard (95%)"
+## AP5 — "Compaction triggered too late (95%)"
 
-**Source** : Morph, 2026-03
+**Source**: Morph, 2026-03
 
-**Symptôme** : Compaction nettoie l'historique mais ne répare pas les sorties erronées déjà produites.
+**Symptom**: Compaction cleans the history but does not repair the wrong outputs already produced.
 
-**Mitigation** : Compaction préventive à **60-70%** du budget, pas curative à 95%.
+**Mitigation**: Preventive compaction at **60-70%** of the budget, not curative at 95%.
 
-**Notre implémentation** : Token ledger avec triggers à 60/70/85/95%, CC obligatoire à 70%.
+**Our implementation**: Token ledger with triggers at 60/70/85/95%, CC mandatory at 70%.
 
 ## AP6 — "Tool result clearing absent"
 
-**Source** : Anthropic effective context engineering, 2025-09
+**Source**: Anthropic effective context engineering, 2025-09
 
-**Symptôme** : Résultats d'anciens tool calls restent dans le contexte, polluent.
+**Symptom**: Results of old tool calls remain in the context, polluting.
 
-**Mitigation** : Effacer tool results après consommation. C'est la compaction la plus sûre.
+**Mitigation**: Clear tool results after consumption. This is the safest compaction.
 
-**Notre implémentation** : Hook `post-tool-use` qui efface les tool results après consumption par la phase suivante.
+**Our implementation**: Hook `post-tool-use` that clears tool results after consumption by the next phase.
 
-## AP7 — "Contexte flood pour tâches courtes"
+## AP7 — "Flood context for short tasks"
 
-**Source** : Morph, 2026-03
+**Source**: Morph, 2026-03
 
-**Symptôme** : Remplir le contexte "parce qu'on peut" avec 1M tokens de fenêtre, rot s'installe.
+**Symptom**: Fill the context "because we can" with 1M tokens of window, rot sets in.
 
-**Mitigation** : Ne charger que ce qui sert la phase courante. `hot_context` sélectif.
+**Mitigation**: Only load what serves the current phase. `hot_context` selective.
 
-**Notre implémentation** : Token budget enforced, hard cap abort.
+**Our implementation**: Token budget enforced, hard cap abort.
 
-## AP8 — "Confondre taille fenêtre et capacité attention"
+## AP8 — "Confusing window size with attention capacity"
 
-**Source** : Morph, 2026-03 + Vectara, 2025
+**Source**: Morph, 2026-03 + Vectara, 2025
 
-**Symptôme** : "Mon modèle a 1M tokens, je peux tout charger". Réalité : rot à 50K, attention dilution quadratique.
+**Symptom**: "my model has 1M tokens, I can load everything". Reality: rot at 50K, attention dilution quadratic.
 
-**Mitigation** : Budget tokens ≠ budget d'attention. Mesurer la qualité par **outcome** (gate), pas par volume.
+**Mitigation**: Token budget ≠ attention budget. Measure quality by **outcome** (gate), not by volume.
 
-**Notre implémentation** : Dashboard par outcome (gate PASS/FAIL), pas par tokens chargés.
+**Our implementation**: Dashboard per outcome (gate PASS/FAIL), not per tokens loaded.
 
 ## AP9 — "Auto-generated CLAUDE.md"
 
-**Source** : ETH Zurich study via HumanLayer, 2026-03
+**Source**: ETH Zurich study via HumanLayer, 2026-03
 
-**Symptôme** : LLM génère un CLAUDE.md → -20% perf, +20% tokens.
+**Symptom**: LLM generates a CLAUDE.md → -20% perf, +20% tokens.
 
-**Mitigation** : **Human-curated** uniquement, sous 60 lignes, chaque ligne = un échec passé.
+**Mitigation**: **Human-curated** only, under 60 lines, each line = a past failure.
 
-**Notre implémentation** : Linter `ctxh-lint-claudemd.sh` qui refuse les >60 lignes et les patterns non-tracés.
+**Our implementation**: Linter `ctxh-lint-claudemd.sh` that refuses the >60 lines and the non-traced patterns.
 
 ## AP10 — "Tool description = prompt-injection vector"
 
-**Source** : HumanLayer, 2026-03
+**Source**: HumanLayer, 2026-03
 
-**Symptôme** : MCP server malicieux injecte via description de tool.
+**Symptom**: MCP server descriptions are injected in the system prompt. A malicious MCP = prompt-injection.
 
-**Mitigation** :
-- Allow-list de MCP servers
-- Signing des descriptions
-- Scope strict
+**Mitigation**:
+- Allow-list of MCP servers
+- Signing of descriptions
+- Strict scope
 
-**Notre implémentation** : `mcp-trust.json` avec signatures, refus par défaut.
+**Our implementation**: `mcp-trust.json` with signatures, refusal by default.
 
-## AP11 — "Subagent return = dump du transcript"
+## AP11 — "Subagent return = dump the transcript"
 
-**Source** : Anthropic multi-agent, 2025-06
+**Source**: Anthropic multi-agent, 2025-06
 
-**Symptôme** : Subagent retourne tout, "game of telephone", tokens exponentiels.
+**Symptom**: Subagent returns everything, "game of telephone", exponential tokens.
 
-**Mitigation** : Return contract strict : ref + summary + artifacts.
+**Mitigation**: Return contract strict: ref + summary + artifacts.
 
-**Notre implémentation** : Validator `<subagent-result>` schema.
+**Our implementation**: Validator `<subagent-result>` schema.
 
-## AP12 — "Agent one-shot l'app"
+## AP12 — "Agent one-shots the app"
 
-**Source** : Anthropic effective harnesses, 2025-11
+**Source**: Anthropic effective harnesses, 2025-11
 
-**Symptôme** : Tente tout faire d'un coup, échoue en milieu, laisse feature half-implemented.
+**Symptom**: Tries to do everything at once, fails mid-stream, leaves feature half-implemented.
 
-**Mitigation** :
-- Feature list JSON avec passes: false
-- 1 feature à la fois
-- Git commit + log à chaque fin
+**Mitigation**:
+- Feature list JSON with passes: false
+- 1 feature at a time
+- Git commit + log at each end
 
-**Notre implémentation** : `feature_list.json` template + `init.sh` pattern.
+**Our implementation**: `feature_list.json` template + `init.sh` pattern.
 
 ## AP13 — "Lost-in-the-middle (positions 5-15)"
 
-**Source** : Liu et al. Stanford/TACL 2024
+**Source**: Liu et al. Stanford/TACL 2024
 
-**Symptôme** : -30% accuracy pour infos au milieu du contexte.
+**Symptom**: -30% accuracy for information in middle of the context.
 
-**Mitigation** : **Éléments critiques en tête/queue**, jamais au milieu.
+**Mitigation**: **Critical elements in head/tail**, never in middle.
 
-**Notre implémentation** : Layout structuré : gate actif (tête) → contexte → findings adversariaux (queue).
+**Our implementation**: Structured layout: gate (head) → context → adversarial findings (tail).
 
-## AP14 — "Compaction 'summarization' perd les détails"
+## AP14 — "Compaction 'summarization' loses details"
 
-**Source** : ACE paper, ICLR 2026
+**Source**: ACE paper, ICLR 2026
 
-**Symptôme** : "Brevity bias" et "context collapse" — résumer itérativement efface.
+**Symptom**: "Brevity bias" and "context collapse" — summarizing iteratively erases.
 
-**Mitigation** : Compaction = préserver structure + détails. ACE playbook pattern.
+**Mitigation**: Compaction = preserve structure + details. ACE playbook pattern.
 
-**Notre implémentation** : `ctxh-compact` qui préserve événements discrets (vs paraphrase).
+**Our implementation**: `ctxh-compact` that preserves discrete events (vs paraphrase).
 
-## AP15 — "Multi-agent sans budget tokens explicite"
+## AP15 — "Multi-agent without explicit token budget"
 
-**Source** : Tran & Kiela, arXiv 2604.02460
+**Source**: Tran & Kiela, arXiv 2604.02460
 
-**Symptôme** : Multi-agent ≤ single-agent à budget tokens égal.
+**Symptom**: Multi-agent ≤ single-agent at equal token budget.
 
-**Mitigation** : Justifier chaque fan-out par (a) parallèle read-heavy ou (b) disjoint tools.
+**Mitigation**: Justify each fan-out by (a) read-heavy parallel or (b) disjoint tools.
 
-**Notre implémentation** : `ctxh-justify-fanout` qui demande la justification avant spawn.
+**Our implementation**: `ctxh-justify-fanout` that asks for justification before spawn.
 
-## AP16 — "50% test suite run après chaque edit"
+## AP16 — "100% test suite run after each edit"
 
-**Source** : HumanLayer, 2026-03
+**Source**: HumanLayer, 2026-03
 
-**Symptôme** : 4K lignes de passing tests flood le contexte, agent hallucine.
+**Symptom**: 4K lines of passing tests flood the context, agent hallucinates.
 
-**Mitigation** : **Success is silent, failure is verbose**. Ne surface que les erreurs.
+**Mitigation**: **Success is silent, failure is verbose**. Surface only errors.
 
-**Notre implémentation** : Hook de test qui swallow stdout sur PASS, ne surface que stderr + summary sur FAIL.
+**Our implementation**: Test hook that swallows stdout on PASS, only surface stderr + summary on FAIL.
 
-## AP17 — "MCP servers 'juste au cas où'"
+## AP17 — "MCP servers 'just in case'"
 
-**Source** : HumanLayer, 2026-03
+**Source**: HumanLayer, 2026-03
 
-**Symptôme** : Descriptions de tools polluent le system prompt, "dumb zone" rapide.
+**Symptom**: Tool descriptions pollute the system prompt, "dumb zone" fast.
 
-**Mitigation** : MCP server activé **uniquement si utilisé**. Sinon OFF.
+**Mitigation**: MCP server enabled **only if used**. Otherwise OFF.
 
-**Notre implémentation** : Toggle MCP on/off selon usage, mesurer l'impact.
+**Our implementation**: Toggle MCP on/off based on usage, measure the impact.
 
-## AP18 — "Pas de budget temps par phase"
+## AP18 — "No time budget per phase"
 
-**Source** : Morph, 2026-03 (35min wall)
+**Source**: Morph, 2026-03 (35min wall)
 
-**Symptôme** : Phase qui dépasse 35 min = échec exponentiel.
+**Symptom**: Phase that exceeds 35 min = exponential failure.
 
-**Mitigation** : Budget temps dur, checkpoint obligatoire au-delà, escalation user.
+**Mitigation**: Hard time budget, mandatory checkpoint beyond, user escalation.
 
-**Notre implémentation** : Timer par phase + soft/hard cap + circuit breaker.
+**Our implementation**: Timer per phase + soft/hard cap + circuit breaker.
 
-## AP19 — "Contexte 'global' dans chaque phase"
+## AP19 — "'Global' context in each phase"
 
-**Source** : A1 (sequential-with-readonly), swebok context engineering
+**Source**: A1 (sequential-with-readonly), swebok context engineering
 
-**Symptôme** : Phase X contient tout Y, viole A1, inflation tokens.
+**Symptom**: Phase X contains all Y, violates A1, inflation of tokens.
 
-**Mitigation** : **Consultation envelope strict**. X reçoit une slice de Y, jamais Y entière.
+**Mitigation**: **Consultation envelope strict**. X receives a slice of Y, never Y in its entirety.
 
-**Notre implémentation** : `<consult phase="Y" query="..."/>` émet une slice token-budgeted.
+**Our implementation**: `<consult phase="Y" query="..."/>` emits a slice token-budgeted.
 
-## AP20 — "Tool definitions = 50% du contexte"
+## AP20 — "Tool definitions = 50% of context"
 
-**Source** : Anthropic code execution, 2025-11
+**Source**: Anthropic code execution, 2025-11
 
-**Symptôme** : 50K tokens de tool definitions pour 5K de tâche utile.
+**Symptom**: 50K tokens of tool definitions for 5K of useful task.
 
-**Mitigation** : Code-as-API (Cloudflare/Anthropic pattern), progressive disclosure via filesystem.
+**Mitigation**: Code-as-API (Cloudflare/Anthropic pattern), progressive disclosure via filesystem.
 
-**Notre implémentation** : Tools exposés comme code dans `servers/` directory, pas dans system prompt.
+**Our implementation**: Tools exposed as code in `servers/` directory, not in system prompt.

@@ -1,12 +1,12 @@
-# Architecture du Harness — CE-Harness v1.0
+# Architecture of the Harness — CE-Harness v1.0
 
-> **Date** : 2026-06-08
-> **Statut** : Validé v1 — implémentation S1-S4
-> **Inspiré de** : Anthropic long-running harness, ACE, MemGPT/Letta, Addy Osmani harness engineering
+> **Date**: 2026-06-08
+> **Status**: Validated v1 — implementation S1-S3
+> **Inspired by**: Anthropic long-running harness, ACE (ICLR 2026), MemGPT/Letta, Addy Osmani harness engineering
 
 ---
 
-## 1. Vue macro
+## 1. Macro view
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -16,9 +16,9 @@
          │                                             │
          ▼                                             ▼
 ┌─────────────────────────────────┐  ┌──────────────────────────────────┐
-│   L0 — CORPUS (offline)         │  │   L1 — MEMORY BLOCKS            │
+│   L0 — Corpus (offline)         │  │   L1 — Memory Blocks            │
 │   skills/ playbooks/ corpus/    │  │   persona, facts, episodic,      │
-│   jamais injecté en bloc        │  │   semantic, procedural           │
+│   never injected in bulk        │  │   semantic, procedural          │
 └────────┬────────────────────────┘  └──────────┬───────────────────────┘
          │                                       │
          ▼                                       ▼
@@ -43,7 +43,7 @@
 ┌──────────────────────────────────────────────────────────────────────┐
 │              L4 — IMMEDIATE LLM VIEW (curated)                       │
 │  ┌────────────────────────────────────────────────────────────┐      │
-│  │ HEAD : gate, budget, contraintes phase, top decisions      │      │
+│  │ HEAD : gate, budget, constraints phase, top decisions      │      │
 │  │ MIDDLE : working context, retrieved data                  │      │
 │  │ TAIL : adversarial findings, recent decisions, UDL         │      │
 │  └────────────────────────────────────────────────────────────┘      │
@@ -57,34 +57,47 @@
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. Composants logiciels (mapping)
+---
 
-| Composant | Langage | Dépendances | Statut |
-|-----------|---------|-------------|--------|
-| `bin/ctxh` (CLI) | Python 3.11+ | typer, rich | À coder S1 |
-| `lib/state.py` | Python | sqlite3 (stdlib) | À coder S1 |
-| `lib/token_ledger.py` | Python | tiktoken (optional) | À coder S1 |
-| `lib/dsl.py` | Python | pyyaml | À coder S1 |
-| `lib/hooks.py` | Python | stdlib | À coder S2 |
-| `lib/subagent_firewall.py` | Python | stdlib | À coder S1 |
-| `lib/code_api.py` | Python | RestrictedPython | À coder S3 |
-| `lib/ace_compact.py` | Python | stdlib | À coder S2 |
-| `lib/ace_playbook.py` | Python | stdlib, sqlite | À coder S3 |
-| `lib/memory_blocks.py` | Python | stdlib | À coder S3 |
-| `lib/context_layout.py` | Python | stdlib | À coder S2 |
-| `lib/pre_hydrate.py` | Python | stdlib | À coder S2 |
-| `lib/adversarial_gate.py` | Python | stdlib, sqlite | À coder S2 |
-| `lib/drew_modes.py` | Python | stdlib | À coder S2 |
-| `lib/hmac_chain.py` | Python | hmac (stdlib) | À coder S2 |
-| `lib/prompts/*.md` | Markdown | — | À rédiger S1 |
-| `bin/install.sh` | Bash | curl, pip | À coder S1 |
-| `tests/test_*.py` | Python | pytest | À coder S1+ |
+## 2. Software components (mapping)
 
-**Volumétrie cible v1.0** : ~3000 LOC Python + ~500 LOC Bash + ~2000 LOC Markdown.
+| Component | Language | Dependencies | Status |
+|-----------|----------|--------------|--------|
+| `bin/ctxh` (CLI) | Python 3.11+ | typer, rich | To code S1 |
+| `lib/state.py` | Python | sqlite3 (stdlib) | To code S1 |
+| `lib/token_ledger.py` | Python | tiktoken (optional) | To code S1 |
+| `lib/dsl.py` | Python | pyyaml | To code S1 |
+| `lib/hooks.py` | Python | stdlib | To code S2 |
+| `lib/subagent_firewall.py` | Python | stdlib | To code S1 |
+| `lib/code_api.py` | Python | RestrictedPython | To code S3 |
+| `lib/ace_compact.py` | Python | stdlib | To code S2 |
+| `lib/pii_tokenizer.py` | Python | stdlib | To code S2 |
+| `lib/subagent_validator.py` | Python | stdlib | To code S2 |
+| `lib/security.py` | Python | stdlib + cryptography optional | To code S2 |
+| `lib/srs_linter.py` | Python | stdlib | To code S2 |
+| `lib/mcp_trust.py` | Python | stdlib | To code S2 |
+| `lib/secrets_vault.py` | Python | stdlib | To code S2 |
+| `lib/contract_validator.py` | Python | pyyaml optional | To code S2 |
+| `lib/memory_blocks.py` | Python | stdlib | To code S2 |
+| `lib/mutation_testing.py` | Python | stdlib | To code S2 |
+| `lib/ci_cd_pinning.py` | Python | stdlib | To code S3 |
+| `lib/image_pin.py` | Python | stdlib | To code S3 |
+| `lib/state.py` (audited) | Python | stdlib | To code S3 |
+| `lib/archive_anonymizer.py` | Python | stdlib | To code S3 |
+| `lib/adversarial_corpus.py` | Python | stdlib | To code S3 |
+| `lib/property_tests.py` | Python | stdlib | To code S3 |
+| `lib/s3_residual.py` | Python | stdlib | To code S3 |
+| `lib/prompts/*.md` | Markdown | — | To write S1 |
+| `bin/install.sh` | Bash | curl, pip | To code S1 |
+| `tests/test_*.py` | Python | pytest | To code S1+ |
 
-## 3. Le State DB (L2)
+**Target volume v1.0**: ~3000 LOC Python + ~500 LOC Bash + ~2000 LOC Markdown.
 
-SQLite WAL, schema :
+---
+
+## 3. The State DB (L2)
+
+SQLite WAL, schema:
 
 ```sql
 -- Session-level (one row per session)
@@ -99,7 +112,7 @@ CREATE TABLE session (
 -- Phase-level (one row per phase activation)
 CREATE TABLE phase (
   id TEXT PRIMARY KEY,
-  session_id TEXT REFERENCES session(id),
+  session_id TEXT,
   name TEXT NOT NULL,
   started_at TEXT NOT NULL,
   ended_at TEXT,
@@ -113,7 +126,7 @@ CREATE TABLE phase (
 CREATE TABLE token_event (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT NOT NULL,
-  phase_id TEXT REFERENCES phase(id),
+  phase_id TEXT,
   component TEXT,  -- 'system_prompt','tools','messages','retrieval','tool_result','output'
   direction TEXT CHECK(direction IN ('input','output')),
   tokens INTEGER,
@@ -124,14 +137,15 @@ CREATE TABLE token_event (
 -- Memory blocks (MemGPT-style, addressable)
 CREATE TABLE memory_block (
   id TEXT PRIMARY KEY,
-  type TEXT CHECK(type IN ('persona','facts','episodic','semantic','procedural','scratchpad')),
-  name TEXT,
-  content TEXT,
-  metadata JSON,
+  type TEXT NOT NULL,
+  name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  owner TEXT NOT NULL,  -- tenant/principal
   version INTEGER DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT,
-  hash TEXT  -- HMAC of (content + prev_hash) for chain
+  created_at REAL NOT NULL,
+  updated_at REAL NOT NULL,
+  metadata JSON,
+  hash TEXT  -- HMAC of content for tamper detection
 );
 
 -- ACE Playbook entries (versioned, deduped)
@@ -182,31 +196,33 @@ CREATE TABLE user_decision (
 );
 ```
 
-**Index critiques** :
-- `idx_token_event_phase` sur `(phase_id, ts)`
-- `idx_playbook_score` sur `score DESC`
-- `idx_audit_event_ts` sur `ts`
-- `idx_memory_block_type` sur `type`
+**Critical indexes**:
+- `idx_token_event_phase` on `(phase_id, ts)`
+- `idx_playbook_score` on `score DESC`
+- `idx_audit_event_ts` on `ts`
+- `idx_memory_block_type` on `type`
 
-## 4. Le Token Ledger (composant critique)
+---
 
-**Objectif** : mesurer, en temps réel, où vont les tokens.
+## 4. The Token Ledger (critical component)
 
-**Granularité** :
-- Par **session** (total)
-- Par **phase** (P0-P10 ou custom)
-- Par **composant** (`system_prompt`, `tools`, `messages`, `retrieval`, `tool_result`, `output`)
-- Par **modèle** (`claude-opus-4-8`, `gpt-5.5`, `qwen36-27b`, etc.)
-- Par **agent** (lead, subagent name)
-- Par **turn**
+**Objective**: measure, in real time, where tokens go.
 
-**API** :
+**Granularity**:
+- Per **session** (total)
+- Per **phase** (P0-P10 or custom)
+- Per **component** (`system_prompt`, `tools`, `messages`, `retrieval`, `tool_result`, `output`)
+- Per **model** (`claude-opus-4-8`, `gpt-5.5`, `qwen36-27b`, etc.)
+- Per **agent** (lead, subagent name)
+- Per **turn**
+
+**API**:
 
 ```python
 from lib.token_ledger import TokenLedger
 
 ledger = TokenLedger(state_db="state.db")
-ledger.start_phase(phase="P3_ARCHITECTURE", soft_cap=8000, hard_cap=15000)
+ledger.start_phase("P3_ARCHITECTURE", soft_cap=8000, hard_cap=15000)
 ledger.record(
     component="messages",
     direction="input",
@@ -224,18 +240,18 @@ top_components = ledger.top_components(phase="P3_ARCHITECTURE", limit=5)
 ledger.dashboard()  # Rich text output
 ```
 
-**Triggers automatiques** :
+**Automatic triggers**:
 
-- **70% du soft cap** : CC (Compaction Checkpoint) obligatoire
-- **85% du soft cap** : WARN affiché + suggestion d'escalade
-- **95% du soft cap** : HARD WARN + réduction automatique des tools chargés
-- **100% du hard cap** : ABORT phase, escalate user
+- **70% of soft cap**: CC (Compaction Checkpoint) required
+- **85% of soft cap**: WARN displayed + suggestion of escalation
+- **95% of soft cap**: HARD WARN + automatic reduction of loaded tools
+- **100% of hard cap**: ABORT phase, escalate user
 
-## 5. Le Subagent Firewall (I3)
+---
 
-**Pattern** : Chaque subagent est un **processus isolé** avec un **context window dédié** et un **return contract strict**.
+## 5. The Subagent Firewall (I3)
 
-**API** :
+**Pattern**: each subagent is an **isolated process** with a **dedicated context window** and a **strict return contract**.
 
 ```python
 from lib.subagent_firewall import spawn_subagent
@@ -252,25 +268,25 @@ result = spawn_subagent(
     parent_phase="P3_ARCHITECTURE",
     model="claude-sonnet-4-5",  # cheaper for subagent
 )
-# → Returns only summary + ref, never full transcript
+# → Returns only summary + refs, never full transcript
 print(result.summary)
 print(result.refs)  # ["src/parser.py:142", "src/lexer.py:88", ...]
 print(result.artifacts)  # paths to files written
 ```
 
-**Garanties** :
-- Le subagent ne voit **jamais** le contexte parent
-- Le subagent ne reçoit que le brief + budget + tools limités
-- Le subagent écrit dans `state.db` (artefact persistant)
-- Le parent reçoit un **résumé DSL** + **pointeurs**, pas un dump
+**Guarantees**:
+- The subagent NEVER sees the parent context
+- The subagent only receives the brief + budget + limited tools
+- The subagent writes to `state.db` (persistent artifact)
+- The parent receives a **summary DSL** + **pointers**, not a dump
 
-**Métaphor security** : "Context firewall" (HumanLayer 2026-03). Le subagent est dans une VM isolée.
+**Security metaphor**: "Context firewall" (HumanLayer 2026-03). The subagent is in an isolated VM.
 
-## 6. Le Code-as-API (I2)
+---
 
-**Pattern Anthropic 2025-11** : exposer les tools comme du code, pas comme du tool calling.
+## 6. The Code-as-API (I2)
 
-**Implémentation** :
+**Pattern Anthropic 2025-11**: expose tools as code, not as tool calling.
 
 ```
 servers/
@@ -284,9 +300,9 @@ servers/
 └── ...
 ```
 
-**Avantage mesuré** : 150K tokens (tools en JSON) → 2K tokens (code API), **98.7% économie**.
+**Measured benefit**: 150K tokens (tools in JSON) → 2K tokens (code API), **98.7% economy**.
 
-**Notre implémentation** :
+**Our implementation**:
 
 ```python
 # lib/code_api.py
@@ -297,21 +313,23 @@ class CodeAPIRunner:
     def run_tool(self, server, tool, input_data):
         """Execute tool in sandbox, return result (sandboxed, not in context)."""
         
-    def agent_can_use(self, code):
-        """Validate agent-written code is safe (RestrictedPython)."""
+    def agent_can_use(self, sandbox: CodeAPISandbox, code: str) -> SandboxResult:
+        """Validate that agent-written code is safe to run."""
 ```
 
-**Use case** : L'agent navigue le filesystem `servers/` pour trouver le bon tool, lit le code, l'appelle. Le résultat reste dans la sandbox sauf si explicitement loggé.
+**Use case**: the agent navigates the `servers/` filesystem to find the right tool, reads the code, calls it. The result stays in the sandbox unless explicitly logged.
 
-## 7. Le Compaction ACE-style (I4)
+---
 
-**Inspiré de** : ACE paper (arXiv 2510.04618, ICLR 2026)
+## 7. The Compaction ACE-style (I4)
 
-**Différence vs summarization** :
-- **Summarization** : paraphrase, perd les détails
-- **Compaction ACE** : préserve structure + détails, déduplique, versionne
+**Inspired by**: ACE paper (arXiv 2510.04618, ICLR 2026)
 
-**API** :
+**Difference vs summarization**:
+- **Summarization**: paraphrase, loses details
+- **Compaction ACE**: preserve structure + details, dedupe, version
+
+**API**:
 
 ```python
 from lib.ace_compact import compact
@@ -325,22 +343,24 @@ result = compact(
 # Returns compacted context + compaction_id + delta_report
 ```
 
-**Mécanisme** :
-1. Identifier les **événements discrets** (vs prose)
-2. Dédupliquer sémantiquement
-3. Regrouper par thème
-4. Préserver les timestamps et hashes
-5. Émettre un delta_report (ce qui a été préservé vs éliminé)
+**Mechanism**:
+1. Identify **discrete events** (vs prose)
+2. Deduplicate semantically
+3. Group by theme
+4. Preserve timestamps and hashes
+5. Emit a delta_report (what was preserved vs eliminated)
 
-**Évite** :
-- **Brevity bias** : perte de détails critiques
-- **Context collapse** : dégradation itérative
+**Avoids**:
+- **Brevity bias**: loss of critical details
+- **Context collapse**: iterative degradation
 
-## 8. Le Context Layout (I5)
+---
 
-**Pattern** : head/tail protection contre lost-in-the-middle.
+## 8. The Context Layout (I5)
 
-**Schéma** :
+**Pattern**: head/tail protection against lost-in-the-middle.
+
+**Schema**:
 
 ```
 [ HEAD: Critical (1-2K tokens) ]
@@ -363,7 +383,7 @@ result = compact(
   - Next-step reminder
 ```
 
-**Implémentation** :
+**Implementation**:
 
 ```python
 from lib.context_layout import build_layout
@@ -376,13 +396,15 @@ context = build_layout(
 )
 ```
 
-**Test** : Lost-in-the-middle audit = placer des éléments critiques au milieu, vérifier qu'ils sont **rejetés** par le layout.
+**Test**: Lost-in-the-middle audit = place critical elements in middle, verify they are **rejected** by the layout.
 
-## 9. Le Pre-hydrate (I7)
+---
 
-**Inspiré de** : Cognition Labs (60% du 1er tour = retrieval), Anthropic long-running harness.
+## 9. The Pre-hydrate (I7)
 
-**API** :
+**Inspired by**: Cognition Labs (60% of first turn = retrieval), Anthropic long-running harness.
+
+**API**:
 
 ```python
 from lib.pre_hydrate import pre_hydrate
@@ -400,19 +422,21 @@ state = pre_hydrate(
 # → state.db now contains hot_context with pre-resolved refs
 ```
 
-**Mécanisme** :
-- À l'entrée de phase, identifier ce que l'agent va chercher
-- Pré-charger dans `state.db` (pas dans le contexte LLM, mais accessible en 1 call)
-- Réduire le 1er tour de 60% retrieval à ~20% (gain 2.5×)
+**Mechanism**:
+- At phase entry, identify what the agent will need to look up
+- Pre-load in `state.db` (not in LLM context, but accessible in 1 call)
+- Reduce the first turn from 60% retrieval to ~20% (2.5× gain)
 
-## 10. Les Adversarial Gates (I6)
+---
 
-**3 rôles + 4 modes** :
+## 10. The Adversarial Gates (I6)
+
+**3 roles + 4 modes**:
 
 ```python
 from lib.adversarial_gate import Gate
 
-# T1 — Casseur
+# T1 — Breaker
 verdict = Gate(role="T1").check(
     artifact=spec_p3,
     attack_vectors=[
@@ -431,7 +455,7 @@ verdict = Gate(role="T2").check(
     nfrs=nfrs_p2,
 )
 
-# T3 — Aval (prédiction P+1)
+# T3 — Downstream (P+1 prediction)
 verdict = Gate(role="T3").predict(
     artifact=code_p5,
     next_phase_contracts=contracts_p6,
@@ -446,19 +470,21 @@ for mode in ['poisoning', 'distraction', 'confusion', 'clash']:
     )
 ```
 
-**Verdict** : `PASS | WARN | FAIL`. FAIL = retry ou escalate. WARN = continuer avec log.
+**Verdict**: `PASS | WARN | FAIL`. FAIL = retry or escalate. WARN = continue with log.
 
-## 11. Le Playbook ACE (I8)
+---
 
-**Inspiré de** : ACE paper (ICLR 2026) — self-improving contexts.
+## 11. The Playbook ACE (I8)
 
-**Mécanisme** :
-- À chaque outcome (gate verdict, user decision), capturer l'insight
-- Stocker dans `playbook` table avec score
-- Dédup sémantique (embeddings, optional)
-- Promote/demote basé sur outcomes
+**Inspired by**: ACE paper (ICLR 2026) — self-improving contexts.
 
-**API** :
+**Mechanism**:
+- At each outcome (gate verdict, user decision), capture the insight
+- Store in `playbook` table with score
+- Deduplicate semantically (embeddings, optional)
+- Promote/demote based on outcomes
+
+**API**:
 
 ```python
 from lib.ace_playbook import Playbook
@@ -482,13 +508,15 @@ pb.demote(bullet_id, hurt=True)
 relevant = pb.retrieve(query="compaction strategy", top_k=5)
 ```
 
-**Cycle self-improving** : Phase 1 produit 50 bullets. Phase 10 en a retenu 12 (score > 0.7), 38 sont tombés (score < 0.3). Le playbook grossit en qualité, pas en taille.
+**Self-improving cycle**: Phase 1 produces 50 bullets. Phase 10 has retained 12 (score > 0.7), 38 fell (score < 0.3). The playbook grows in quality, not in size.
 
-## 12. Le HMAC Chain (audit)
+---
 
-**Pattern** : Cossack Labs 2025, RJV Audit Vault.
+## 12. The HMAC Chain (audit)
 
-**Implémentation** :
+**Pattern**: Cossack Labs 2025, RJV Audit Vault.
+
+**Implementation**:
 
 ```python
 import hmac, hashlib, json
@@ -497,88 +525,98 @@ class HMACChain:
     def __init__(self, key_path=".audit_key"):
         with open(key_path, "rb") as f:
             self.key = f.read()
-    
-    def append(self, event_type, payload):
-        prev_hash = self._get_last_hash()
+
+    def append(self, event_type, payload, prev_hash=""):
         event = {
             "ts": now(),
             "type": event_type,
             "payload": payload,
             "prev_hash": prev_hash,
         }
-        event["hash"] = hmac.new(
-            self.key,
-            json.dumps(event, sort_keys=True).encode(),
-            hashlib.sha256
-        ).hexdigest()
-        self._insert(event)
+        content = json.dumps(event, sort_keys=True).encode()
+        h = hmac.new(self.key, content, hashlib.sha256).hexdigest()
+        event["hash"] = h
         return event["hash"]
-    
+
     def verify(self):
         """Replay all events, verify chain integrity."""
         ...
 ```
 
-**Usage** : Tous les events (phase_start, phase_end, tool_call, gate_decision, ledger_event) sont hashés et chaînés. Modification = chaîne cassée = détectée.
+**Usage**: all events (phase_start, phase_end, tool_call, gate_decision, ledger_event) are hashed and chained. Modification = broken chain = detected.
 
-## 13. Le DSL (KEY:VALUE;;KEY:VALUE)
+---
 
-**Inspiré de** : swebok-v4-harness DSL, Anthropic subagent brief 4-champs.
+## 13. The DSL (KEY:VALUE;;KEY:VALUE)
 
-**Format** :
+**Inspired by**: swebok-v4-harness DSL, Anthropic subagent brief 4-champs.
+
+**Format**:
 ```
 KEY1:VALUE1;;KEY2:VALUE2;;KEY3:VALUE3
 ```
 
-**Avantages** :
+**Advantages**:
 - Human-readable
-- Machine-parseable (regex simple)
-- Lisible en clair (pas de JSON braces)
-- Compatible terminal (newline-safe)
+- Machine-parseable (simple regex)
+- Readable as plain text (no JSON braces)
+- Terminal compatible (newline-safe)
 
-**Use cases** :
-- Brief subagent : `OBJECT:...;;FORMAT:...;;TOOLS:...;;BOUND:...`
-- Gate verdict : `VERDICT:PASS;;RATIONALE:...;;FINDINGS:...`
-- Phase transition : `PHASE:P4_DESIGN;;STATUS:ACTIVE;;BUDGET:8000`
-- Token event : `COMPONENT:MESSAGES;;DIRECTION:INPUT;;TOKENS:1200;;MODEL:CLAUDE-OPUS-4-8`
+**Use cases**:
+- Subagent brief: `OBJECT:...;;FORMAT:...;;TOOLS:...;;BOUND:...`
+- Gate verdict: `VERDICT:PASS;;RATIONALE:...;;FINDINGS:...`
+- Phase transition: `PHASE:P4_DESIGN;;STATUS:ACTIVE;;BUDGET:8000`
+- Token event: `COMPONENT:MESSAGES;;DIRECTION:INPUT;;TOKENS:1200;;MODEL:CLAUDE-OPUS-4-8`
 
-**Parser** :
+**Parser**:
 
 ```python
 def parse_dsl(line: str) -> dict:
     """Parse KEY:VALUE;;KEY:VALUE format."""
+    if not line or "::" not in line and ":" not in line:
+        return {}
     pairs = line.split(";;")
-    return {k.strip(): v.strip() for k, v in (p.split(":", 1) for p in pairs)}
+    result = {}
+    for p in pairs:
+        if ":" not in p:
+            continue
+        k, v = p.split(":", 1)
+        result[k.strip()] = v.strip()
+    return result
 ```
 
-## 14. Hooks (cycle de vie)
+---
 
-**7 hooks lifecycle** :
+## 14. Hooks (lifecycle)
 
-| Hook | Quand | Action |
+**7 lifecycle hooks**:
+
+| Hook | When | Action |
 |------|-------|--------|
-| `PreToolUse` | Avant chaque tool call | Valider args, budget, scope |
-| `PostToolUse` | Après tool call | Clear result, log, dedup |
-| `SubagentStart` | Avant spawn subagent | Init isolated context, return contract |
-| `SubagentEnd` | Après subagent complete | Summary extraction, firewall check |
-| `PhaseStart` | Début de phase | Pre-hydrate, budget init, gate init |
-| `PhaseEnd` | Fin de phase | Compaction, ledger snapshot, gate audit |
-| `UserMessage` | À chaque msg user | UDL record, decision threshold classify |
+| `PreToolUse` | Before each tool call | Validate args, budget, scope |
+| `PostToolUse` | After tool call | Clear result, log, dedup |
+| `SubagentStart` | Before subagent spawn | Init isolated context, return contract |
+| `SubagentEnd` | After subagent complete | Summary extraction, firewall check |
+| `PhaseStart` | Phase begin | Pre-hydrate, budget init, gate init |
+| `PhaseEnd` | Phase end | Compaction, ledger snapshot, gate audit |
+| `UserMessage` | Each user msg | UDL record, decision threshold classify |
 
-**Implémentation** : chaque hook = un script Python dans `hooks/` avec une fonction `def main(event): ...`.
+**Implementation**: each hook = a Python script in `hooks/` with a function `def main(event): ...`.
+
+---
 
 ## 15. Distribution & installation
 
 ```bash
 # Install
 curl -fsSL https://raw.githubusercontent.com/doz34/context-engineering-harness/main/install.sh | bash
-# ou
+# or
 pip install ctxh  # PyPI
 
-# Init dans un projet
+# Init in a project
 cd my-project
 ctxh init
-# Crée : .ctxh/state.db, .ctxh/CLAUDE.md, .ctxh/hooks/
+# Creates: .ctxh/state.db, .ctxh/CLAUDE.md, .ctxh/hooks/
 
 # Usage
 ctxh measure --demo  # Token ledger demo
@@ -587,23 +625,27 @@ ctxh compact --target 2000
 ctxh gate --role T1 --artifact spec.md
 ```
 
+---
+
 ## 16. Tests & validation
 
-- **Unit tests** : pytest, 100% coverage cible
-- **Integration tests** : harness sur 5 use-cases réels
-- **Adversarial tests** : 4 Drew Breunig modes × 3 T-rôles
-- **Benchmark** : 3-5× économie mesurée vs baseline
-- **Acceptance** : 5 projets pilote valident en production
-
-## 17. Roadmap technique
-
-| Sprint | Cible | Livrable | Critère PASS |
-|--------|-------|----------|--------------|
-| S1 | POV | `bin/ctxh`, `lib/state`, `lib/token_ledger`, `lib/dsl`, `lib/subagent_firewall` | Demo 1 use-case, 3× économie |
-| S2 | MVP | + `lib/hooks`, `lib/ace_compact`, `lib/context_layout`, `lib/adversarial_gate` | 5 hooks, 4-mode audit |
-| S3 | Beta | + `lib/code_api`, `lib/ace_playbook`, `lib/memory_blocks`, `lib/pre_hydrate` | Memory + self-improving |
-| S4 | v1.0 | + tests adversariaux, docs, install.sh, PyPI | 100% tests, MIT, 3-5× mesuré |
+- **Unit tests**: pytest, 100% coverage target
+- **Integration tests**: harness on 5 real use cases
+- **Adversarial tests**: 4 Drew Breunig modes × 3 T-rôles
+- **Benchmark**: 3-5× economy measured vs baseline
+- **Acceptance**: 5 pilot projects validate in production
 
 ---
 
-*Architecture rédigée 2026-06-08 par discovery-orchestrator. 17 sections, 17 invariants. À réviser après S1.*
+## 17. Technical roadmap
+
+| Sprint | Target | Effort | Acceptance criterion |
+|--------|--------|--------|----------------------|
+| S1 | POV (Proof of Value) | M | Token ledger live + 1 use case end-to-end |
+| S2 | MVP | M | 5 hooks + state machine + ledger + 4-failure-mode gates |
+| S3 | Beta | L | Code-as-API + ACE playbook + memory blocks |
+| S4 | v1.0 | L | Production-ready, adversarial tests, PyPI |
+
+---
+
+*Architecture written 2026-06-08 by discovery-orchestrator. 17 sections, 17 invariants. To be revised after S1. v1.0 release 2026-06-09.*
