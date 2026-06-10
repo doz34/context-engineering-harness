@@ -94,15 +94,29 @@ def test_spawn_rejects_invalid_brief():
 
 
 def test_isolation_audit():
+    """verify_isolation inspects the ledger rather than returning a stub."""
     with tempfile.TemporaryDirectory() as d:
         db = StateDB(path=os.path.join(d, "test.db"))
         ledger = TokenLedger(state=db, verbose=False)
         ledger.start_phase("p1", "Test", soft_cap=1000, hard_cap=2000)
         fw = SubagentFirewall(ledger, "p1")
 
-        audit = fw.verify_isolation("sub_1")
+        # (1) No spawn happened → audit fails cleanly (not a stub)
+        no_spawn = fw.verify_isolation("sub_never_spawned")
+        assert no_spawn["is_valid"] is False
+        assert "no spawn ledger entry" in no_spawn["reason"]
+
+        # (2) Spawn a subagent, then verify → audit passes
+        from lib.subagent_firewall import SubagentBrief
+        brief = SubagentBrief(OBJECT="audit me", FORMAT="text",
+                              TOOLS="grep", BOUND="in-scope")
+        fw.spawn(brief)
+        spawn_id = f"p1_sub_1"
+        audit = fw.verify_isolation(spawn_id)
+        assert audit["is_valid"] is True
         assert audit["parent_context_visible"] is False
         assert audit["return_summary_only"] is True
+        assert "spawn_recorded_at" in audit
 
 
 if __name__ == "__main__":

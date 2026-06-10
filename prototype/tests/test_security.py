@@ -141,10 +141,27 @@ def test_audit_chain_cross_epoch_verification():
     rh = RotatingHMAC(generate_master_key())
     ts_past = int(time.time()) - EPOCH_SECONDS * 3  # 3 epochs ago
     event = rh.sign("past event", prev_hash="", ts=ts_past)
-    # Verify still works
-    assert rh.verify(event)
-    # Even after the epoch has rotated, the past key is derived on-demand
-    # from the master + epoch_id.
+    # With strict_epoch=False, the HMAC itself must still verify
+    # (key derivation works across epochs). This is what "cross-epoch
+    # verification" tests — the cryptographic check, not the
+    # strict-epoch invariant (see strict_epoch_rejects_stale_events).
+    assert rh.verify(event, strict_epoch=False)
+    # And with strict_epoch=True, the same event is rejected as stale
+    # (signed more than 1 epoch ago).
+    assert not rh.verify(event, strict_epoch=True)
+
+
+def test_strict_epoch_rejects_stale_events():
+    """Events older than 1 epoch are rejected when strict_epoch=True."""
+    rh = RotatingHMAC(generate_master_key())
+    # 2 epochs ago → stale by strict_epoch (>1 epoch in the past)
+    ts_stale = int(time.time()) - EPOCH_SECONDS * 2
+    stale = rh.sign("stale event", prev_hash="", ts=ts_stale)
+    assert not rh.verify(stale, strict_epoch=True)
+    # 1 epoch ago → still inside the 1-epoch tolerance
+    ts_one_back = int(time.time()) - EPOCH_SECONDS
+    one_back = rh.sign("one epoch back", prev_hash="", ts=ts_one_back)
+    assert rh.verify(one_back, strict_epoch=True)
 
 
 if __name__ == "__main__":

@@ -144,14 +144,37 @@ def safe_subagent_result(summary: str, refs: List[str] = None,
                          tokens: int = 0, raw_size: int = 0) -> str:
     """
     Build a safe <subagent-result> DSL line, validated.
-    Returns the DSL string, or raises ValueError on validation failure.
+    Returns the DSL string, or raises ValueError on validation failure
+    (oversized fields are rejected, never silently truncated).
     """
+    # Reject oversized inputs explicitly. Silent slicing of str(int) used
+    # to corrupt data (e.g. 99999999999999 → 9999999999). Callers must
+    # pre-trim or raise on their own.
+    if len(summary) > 500:
+        raise ValueError(f"summary too long: {len(summary)} > 500")
+    refs = refs or []
+    artifacts = artifacts or []
+    for r in refs:
+        if ";;" in r:
+            raise ValueError(f"ref contains DSL delimiter ';;': {r!r}")
+    for a in artifacts:
+        if ";;" in a:
+            raise ValueError(f"artifact contains DSL delimiter ';;': {a!r}")
+    if len(",".join(refs)) > 2000:
+        raise ValueError("refs joined length > 2000")
+    if len(",".join(artifacts)) > 2000:
+        raise ValueError("artifacts joined length > 2000")
+    if tokens < 0 or tokens > 10**10:
+        raise ValueError(f"tokens out of range [0, 10^10]: {tokens}")
+    if raw_size < 0 or raw_size > 10**15:
+        raise ValueError(f"raw_size out of range [0, 10^15]: {raw_size}")
+
     fields = {
-        "SUMMARY": summary[:500],
-        "REFS": ",".join(refs or [])[:2000],
-        "ARTIFACTS": ",".join(artifacts or [])[:2000],
-        "TOKENS": str(tokens)[:10],
-        "RAW_SIZE": str(raw_size)[:15],
+        "SUMMARY": summary,
+        "REFS": ",".join(refs),
+        "ARTIFACTS": ",".join(artifacts),
+        "TOKENS": str(tokens),
+        "RAW_SIZE": str(raw_size),
     }
     dsl = emit_dsl(fields)
     result = validate(dsl, strict=True)

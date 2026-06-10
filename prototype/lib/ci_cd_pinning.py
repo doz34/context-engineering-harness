@@ -186,9 +186,19 @@ def validate_github_workflow(workflow: dict) -> PinningResult:
         if not isinstance(job, dict):
             continue
 
-        # 1. Container image (at job level)
-        container = job.get("container", {})
-        if isinstance(container, dict) and "image" in container:
+        # 1. Container image (at job level).
+        # GitHub Actions schema permits `container` as either a dict
+        # (`container: { image: foo }`) or a bare string (`container: foo`).
+        container = job.get("container")
+        if isinstance(container, str) and container:
+            line = f"jobs.{job_name}.container"
+            step_issues = validate_docker_image(container)
+            issues.extend([PinningIssue(i.severity, line, i.message) for i in step_issues])
+            if step_issues:
+                mutable += 1
+            else:
+                pinned += 1
+        elif isinstance(container, dict) and "image" in container:
             line = f"jobs.{job_name}.container.image"
             step_issues = validate_docker_image(container["image"])
             issues.extend([PinningIssue(i.severity, line, i.message) for i in step_issues])
@@ -197,12 +207,25 @@ def validate_github_workflow(workflow: dict) -> PinningResult:
             else:
                 pinned += 1
 
-        # 2. Services (at job level)
-        services = job.get("services", {})
+        # 2. Services (at job level).
+        # GitHub Actions schema permits `services` as a dict
+        # (`services: { pg: { image: ... } }`) or a list
+        # (`services: [ { name: pg, image: ... } ]`).
+        services = job.get("services")
         if isinstance(services, dict):
             for svc_name, svc in services.items():
                 if isinstance(svc, dict) and "image" in svc:
                     line = f"jobs.{job_name}.services.{svc_name}.image"
+                    step_issues = validate_docker_image(svc["image"])
+                    issues.extend([PinningIssue(i.severity, line, i.message) for i in step_issues])
+                    if step_issues:
+                        mutable += 1
+                    else:
+                        pinned += 1
+        elif isinstance(services, list):
+            for i, svc in enumerate(services):
+                if isinstance(svc, dict) and "image" in svc:
+                    line = f"jobs.{job_name}.services[{i}].image"
                     step_issues = validate_docker_image(svc["image"])
                     issues.extend([PinningIssue(i.severity, line, i.message) for i in step_issues])
                     if step_issues:
@@ -284,10 +307,29 @@ def validate_gitlab_ci(config: dict) -> PinningResult:
 
 
 def validate_workflow_file(path: str, kind: str = "github") -> PinningResult:
-    """Load and validate a workflow file."""
-    import yaml
-    with open(path) as f:
-        config = yaml.safe_load(f) or {}
+    """Load and validate a workflow file.
+
+    Returns a PinningResult with an ERROR issue if the file cannot be parsed
+    (e.g., pyyaml is not installed and the file is YAML, not JSON).
+    """
+    try:
+        import yaml
+    except ImportError:
+        return PinningResult(
+            is_valid=False,
+            issues=[PinningIssue(
+                "ERROR", "yaml",
+                "pyyaml is required to validate workflow files; install with `pip install pyyaml`",
+            )],
+        )
+    try:
+        with open(path) as f:
+            config = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as e:
+        return PinningResult(
+            is_valid=False,
+            issues=[PinningIssue("ERROR", "parse", f"Failed to load workflow file: {e}")],
+        )
     if kind == "github":
         return validate_github_workflow(config)
     elif kind == "gitlab":

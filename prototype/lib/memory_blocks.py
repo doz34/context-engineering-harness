@@ -44,8 +44,23 @@ class MemoryStore:
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         self._init_schema()
 
+    def _connect(self):
+        """Open a connection with foreign-key enforcement enabled.
+
+        SQLite defaults to OFF for `PRAGMA foreign_keys`, so the FK
+        declared on memory_acl.block_id was previously silently ignored.
+        Every call must go through this helper.
+        """
+        c = sqlite3.connect(self.db_path)
+        c.execute("PRAGMA foreign_keys=ON")
+        return c
+
     def _init_schema(self):
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
+            # Enable foreign-key enforcement. SQLite defaults to OFF,
+            # so the FK declared on memory_acl.block_id was silently
+            # ignored — orphan ACL rows survived block deletion.
+            c.execute("PRAGMA foreign_keys=ON")
             c.executescript("""
                 CREATE TABLE IF NOT EXISTS memory_blocks (
                     id TEXT PRIMARY KEY,
@@ -85,7 +100,7 @@ class MemoryStore:
         now = time.time()
         h = self._hash_content(content)
 
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             c.execute(
                 "INSERT INTO memory_blocks (id, type, name, content, owner, version, created_at, updated_at, metadata, hash) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -111,7 +126,7 @@ class MemoryStore:
         """Read a block, with ACL check."""
         if not self._check_permission(block_id, principal, "read"):
             raise PermissionError(f"Principal '{principal}' has no read access to '{block_id}'")
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             row = c.execute(
                 "SELECT content, hash FROM memory_blocks WHERE id = ?", (block_id,)
             ).fetchone()
@@ -129,7 +144,7 @@ class MemoryStore:
             raise PermissionError(f"Principal '{principal}' has no write access to '{block_id}'")
         now = time.time()
         h = self._hash_content(content)
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             c.execute(
                 "UPDATE memory_blocks SET content = ?, hash = ?, version = version + 1, updated_at = ? "
                 "WHERE id = ?",
@@ -140,14 +155,14 @@ class MemoryStore:
     def delete(self, block_id: str, principal: str) -> bool:
         if not self._check_permission(block_id, principal, "delete"):
             raise PermissionError(f"Principal '{principal}' has no delete access to '{block_id}'")
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             c.execute("DELETE FROM memory_blocks WHERE id = ?", (block_id,))
             c.execute("DELETE FROM memory_acl WHERE block_id = ?", (block_id,))
         return True
 
     def list_blocks(self, principal: str) -> List[Dict]:
         """List blocks the principal has read access to."""
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             rows = c.execute(
                 "SELECT b.id, b.type, b.name, b.owner FROM memory_blocks b "
                 "JOIN memory_acl a ON b.id = a.block_id "
@@ -158,7 +173,7 @@ class MemoryStore:
 
     def grant(self, block_id: str, principal: str, permissions: Set[str]):
         """Grant permissions to a principal."""
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             for perm in permissions:
                 c.execute(
                     "INSERT OR IGNORE INTO memory_acl (block_id, principal, permission) VALUES (?, ?, ?)",
@@ -167,14 +182,14 @@ class MemoryStore:
 
     def revoke(self, block_id: str, principal: str):
         """Revoke all permissions from a principal."""
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             c.execute(
                 "DELETE FROM memory_acl WHERE block_id = ? AND principal = ?",
                 (block_id, principal)
             )
 
     def _check_permission(self, block_id: str, principal: str, perm: str) -> bool:
-        with sqlite3.connect(self.db_path) as c:
+        with self._connect() as c:
             row = c.execute(
                 "SELECT 1 FROM memory_acl WHERE block_id = ? AND principal = ? AND permission = ?",
                 (block_id, principal, perm)

@@ -10,7 +10,10 @@ and tokenizes PII before it reaches the model".
 
 import re
 import hashlib
+import html
 import secrets
+import unicodedata
+import urllib.parse
 from typing import Tuple, Dict, List
 from dataclasses import dataclass, field
 
@@ -65,14 +68,93 @@ class PIITokenizer:
     def detect(self, text: str) -> List[Tuple[str, str, int, int]]:
         """
         Detect PII in text. Returns list of (type, value, start, end).
+
+        Scans the original text PLUS a deobfuscated form (NFKC + URL-decode
+        + HTML-unescape) to defeat common encoding bypasses
+        (fullwidth chars, %40, &amp;, etc.). For each match in the
+        deobfuscated form, the value is searched in the original text to
+        recover positions.
         """
-        findings = []
+        findings: List[Tuple[str, str, int, int]] = []
+        seen: set = set()  # (type, start, end) — dedupe overlaps
+
+        def add(pii_type: str, value: str, start: int, end: int) -> None:
+            key = (pii_type, start, end)
+            if key in seen:
+                return
+            seen.add(key)
+            findings.append((pii_type, value, start, end))
+
+        # 1. Original text
         for pii_type, pattern in self.PATTERNS:
             for match in pattern.finditer(text):
-                findings.append((pii_type, match.group(), match.start(), match.end()))
+                add(pii_type, match.group(), match.start(), match.end())
+
+        # 2. Deobfuscated text (catches URL-encoded, HTML-entity, fullwidth,
+        # and zero-width-removed forms). We don't track char-by-char
+        # mapping back to the original positions (NFKC may change length)
+        # — we re-find the matched value in the original text instead.
+        normalized = self._deobfuscate(text)
+        if normalized != text:
+            for pii_type, pattern in self.PATTERNS:
+                for match in pattern.finditer(normalized):
+                    val = match.group()
+                    # For the URL-encoded case, `val` is the decoded
+                    # value (e.g. "alice@acme.com") which does NOT appear
+                    # in the original ("alice%40acme.com"). We use a
+                    # reverse URL-encode of the @ sign to find the encoded
+                    # span in the original.
+                    orig_start = self._find_in_original(text, val, match.group())
+                    if orig_start == -1:
+                        continue
+                    orig_end = orig_start + len(val)  # may be imprecise for
+                    # NFKC-only changes; tolerable for tokenization.
+                    add(pii_type, val, orig_start, orig_end)
+
         # Sort by position
         findings.sort(key=lambda x: x[2])
         return findings
+
+    @staticmethod
+    def _deobfuscate(text: str) -> str:
+        """Apply NFKC + URL-decode + HTML-unescape to defeat common
+        encoding bypasses. Order matters: NFKC first to defeat fullwidth
+        and homoglyph confusables that have NFKC decompositions, then
+        URL-decode, then HTML-unescape.
+        """
+        s = unicodedata.normalize("NFKC", text)
+        s = urllib.parse.unquote(s)
+        s = html.unescape(s)
+        return s
+
+    @staticmethod
+    def _find_in_original(original: str, decoded_value: str,
+                          normalized_match: str) -> int:
+        """Locate a deobfuscated PII value back in the original text.
+
+        Tries: (1) exact match (covers fullwidth/NFKC cases), (2) URL-encoded
+        @ in original (covers %40 bypass), (3) HTML entity (covers &amp;).
+        Returns -1 if no plausible original position can be recovered.
+        """
+        pos = original.find(decoded_value)
+        if pos != -1:
+            return pos
+        # Try URL-encoded @ inside the decoded value
+        if "@" in decoded_value:
+            user, _, domain = decoded_value.partition("@")
+            encoded = f"{user}%40{domain}"
+            pos = original.find(encoded)
+            if pos != -1:
+                return pos
+        # Try HTML-entity @ inside the decoded value
+        if "@" in decoded_value:
+            user, _, domain = decoded_value.partition("@")
+            for entity in ("&amp;", "&#64;"):
+                ent = f"{user}{entity}{domain}"
+                pos = original.find(ent)
+                if pos != -1:
+                    return pos
+        return -1
 
     def tokenize(self, text: str) -> Tuple[str, List[PIIMapping]]:
         """

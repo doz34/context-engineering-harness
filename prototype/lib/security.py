@@ -25,6 +25,36 @@ from contextlib import contextmanager
 # cryptography fallback. If cryptography is not installed, we use
 # a Fernet-style wrapper around AES.
 
+# Try to import cryptography (preferred cipher). If unavailable, the
+# fallback stream cipher from security_fallback is used. We import both
+# eagerly at module load (inside try/except) so that the encrypt/decrypt
+# methods never need a lazy relative import — which would fail if this
+# module is loaded outside of its package context (e.g., script mode).
+try:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    _HAVE_AESGCM = True
+except ImportError:
+    AESGCM = None  # type: ignore
+    _HAVE_AESGCM = False
+
+try:
+    from .security_fallback import aes_ctr_hmac_encrypt, aes_ctr_hmac_decrypt
+    _HAVE_FALLBACK = True
+except ImportError:
+    # Direct-import fallback (e.g., script mode without lib package).
+    # security_fallback is stdlib-only and ships alongside this module.
+    try:
+        import importlib
+        _fallback_mod = importlib.import_module("security_fallback")
+        aes_ctr_hmac_encrypt = _fallback_mod.aes_ctr_hmac_encrypt
+        aes_ctr_hmac_decrypt = _fallback_mod.aes_ctr_hmac_decrypt
+        _HAVE_FALLBACK = True
+    except ImportError:
+        aes_ctr_hmac_encrypt = None  # type: ignore
+        aes_ctr_hmac_decrypt = None  # type: ignore
+        _HAVE_FALLBACK = False
+
+
 def _derive_key(passphrase: str, salt: bytes, length: int = 32) -> bytes:
     """PBKDF2-HMAC-SHA256 key derivation."""
     return hashlib.pbkdf2_hmac("sha256", passphrase.encode(), salt, 200_000)[:length]
@@ -64,12 +94,15 @@ class EncryptedDB:
         self._cipher = self._init_cipher()
 
     def _init_cipher(self):
-        """Try to import cryptography; fallback to built-in."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        """Pick AESGCM (preferred) or built-in fallback based on what's available."""
+        if _HAVE_AESGCM:
             return ("AESGCM", AESGCM(self.key))
-        except ImportError:
-            return ("BUILTIN", None)  # Use hashlib-based fallback
+        if _HAVE_FALLBACK:
+            return ("BUILTIN", None)  # Use stdlib-based fallback
+        raise RuntimeError(
+            "No encryption backend available: install `cryptography` "
+            "or ensure lib/security_fallback.py is on the import path."
+        )
 
     def encrypt(self, plaintext: str) -> bytes:
         """Encrypt a string. Returns nonce + ciphertext."""
@@ -78,21 +111,21 @@ class EncryptedDB:
             nonce = secrets.token_bytes(12)
             ct = self._cipher[1].encrypt(nonce, pt, None)
             return nonce + ct
-        else:
-            # Fallback: use AES-256-CTR + HMAC-SHA256 (encrypt-then-MAC)
-            # This is NOT secure against nonce reuse but acceptable for POV
-            # when cryptography lib is not available.
-            from .security_fallback import aes_ctr_hmac_encrypt
-            return aes_ctr_hmac_encrypt(self.key, pt)
+        # Fallback: AES-256-CTR + HMAC-SHA256 (encrypt-then-MAC).
+        # NOT secure against nonce reuse but acceptable for POV
+        # when cryptography lib is not available.
+        if aes_ctr_hmac_encrypt is None:
+            raise RuntimeError("Fallback cipher unavailable")
+        return aes_ctr_hmac_encrypt(self.key, pt)
 
     def decrypt(self, ciphertext: bytes) -> str:
         """Decrypt. Inverse of encrypt."""
         if self._cipher[0] == "AESGCM":
             nonce, ct = ciphertext[:12], ciphertext[12:]
             return self._cipher[1].decrypt(nonce, ct, None).decode()
-        else:
-            from .security_fallback import aes_ctr_hmac_decrypt
-            return aes_ctr_hmac_decrypt(self.key, ciphertext).decode()
+        if aes_ctr_hmac_decrypt is None:
+            raise RuntimeError("Fallback cipher unavailable")
+        return aes_ctr_hmac_decrypt(self.key, ciphertext).decode()
 
     def is_secure(self) -> bool:
         """Returns True if AESGCM (recommended), False if fallback."""
@@ -147,12 +180,14 @@ class RotatingHMAC:
     def _derive_epoch_key(self, epoch_id: int) -> bytes:
         """Derive epoch-specific key from master + epoch_id."""
         info = f"ce-harness-epoch-{epoch_id}".encode()
-        # HKDF-Expand (we use PBKDF2 for simplicity)
+        # HKDF-Expand (we use PBKDF2 for simplicity, but with the same
+        # iteration count as the master key derivation at line 30 to
+        # avoid a 200× cheaper attack on epoch keys vs master key).
         return hashlib.pbkdf2_hmac(
             "sha256",
             self.master_key,
             info,
-            1000,
+            200_000,
             dklen=32,
         )
 
@@ -193,13 +228,23 @@ class RotatingHMAC:
     def verify(self, event: Dict[str, str], strict_epoch: bool = True) -> bool:
         """
         Verify a signed event. If strict_epoch=True (default), the event
-        must have been signed in the current or previous epoch.
+        must have been signed in the current or previous epoch (one-epoch
+        tolerance to absorb clock skew between signer and verifier).
         """
         try:
             ts = int(event["ts"])
             eid = int(event["epoch_id"])
         except (KeyError, ValueError):
             return False
+
+        # Strict-epoch check: reject events signed more than 1 epoch
+        # in the past (no tolerance for stale events) or in the future
+        # (rejects pre-computed forgeries). Implemented per the docstring
+        # that previously claimed this behavior but never enforced it.
+        if strict_epoch:
+            now_eid = current_epoch_id()
+            if eid < now_eid - 1 or eid > now_eid:
+                return False
 
         # Recompute hash with epoch-specific key
         if eid not in self._epoch_cache:

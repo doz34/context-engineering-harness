@@ -117,13 +117,24 @@ def post_tool_use_clear_result(ctx: HookContext) -> HookResult:
     # If large, offload to filesystem (record in audit chain)
     head = full[:200]
     tail = full[-200:]
+    # Sanitize tool_name to a safe filename component. tool_name is
+    # caller-controlled and may contain '../' segments that would escape
+    # the .ctxh/tool_results/ directory. Restrict to [A-Za-z0-9_.-] and
+    # fall back to a hash if the sanitized name is empty.
+    import hashlib
+    import re
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", ctx.tool_name or "tool")
+    if not safe_name or safe_name in (".", ".."):
+        safe_name = "tool_" + hashlib.sha256(
+            (ctx.tool_name or "").encode()
+        ).hexdigest()[:8]
+    full_path = f".ctxh/tool_results/{safe_name}_{ctx.timestamp}.txt"
     cleared = (
         f"{head}\n... [CLEARED: {len(full) - 400} chars offloaded to "
-        f".ctxh/tool_results/{ctx.tool_name}_{ctx.timestamp}.txt] ...\n{tail}"
+        f"{full_path}] ...\n{tail}"
     )
 
     # Persist full result for re-access (audit chain)
-    full_path = f".ctxh/tool_results/{ctx.tool_name}_{ctx.timestamp}.txt"
     try:
         import os
         os.makedirs(os.path.dirname(full_path), exist_ok=True)

@@ -159,17 +159,39 @@ def validate_asyncapi(spec: dict) -> ContractResult:
 
 
 def load_and_validate(path: str, kind: str = "openapi") -> ContractResult:
-    """Load a contract file and validate it."""
-    with open(path) as f:
-        if path.endswith(".yaml") or path.endswith(".yml"):
-            try:
-                import yaml
-                spec = yaml.safe_load(f)
-            except ImportError:
-                # Fallback to JSON
-                spec = json.loads(f.read() or "{}")
-        else:
-            spec = json.load(f)
+    """Load a contract file and validate it.
+
+    For .yaml/.yml files, pyyaml is required. The previous "fallback" to
+    json.loads on a YAML file was broken (JSON parser cannot read YAML syntax).
+    We now surface a clear ContractResult error instead of crashing.
+    """
+    is_yaml = path.endswith(".yaml") or path.endswith(".yml")
+    try:
+        with open(path) as f:
+            if is_yaml:
+                try:
+                    import yaml
+                except ImportError:
+                    return ContractResult(
+                        is_valid=False,
+                        issues=[Issue("ERROR", "yaml",
+                                      "pyyaml is required to load .yaml/.yml files; "
+                                      "install with `pip install pyyaml`")],
+                    )
+                try:
+                    spec = yaml.safe_load(f) or {}
+                except yaml.YAMLError as e:
+                    return ContractResult(
+                        is_valid=False,
+                        issues=[Issue("ERROR", "parse", f"Invalid YAML: {e}")],
+                    )
+            else:
+                spec = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        return ContractResult(
+            is_valid=False,
+            issues=[Issue("ERROR", "load", f"Failed to read {path}: {e}")],
+        )
 
     if kind == "openapi":
         return validate_openapi(spec)

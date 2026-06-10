@@ -79,7 +79,16 @@ SAFE_BUILTINS = {
     "list", "map", "max", "min", "next", "object", "oct", "ord",
     "pow", "print", "property", "range", "repr", "reversed", "round",
     "set", "slice", "sorted", "staticmethod", "str", "sum", "super",
-    "tuple", "type", "vars", "zip", "__import__",  # __import__ is whitelisted but checked at runtime
+    "tuple", "type", "vars", "zip",
+    # Class definition support (without exposing dunder-execution surface)
+    "__build_class__",
+    # Common exception types — required for legitimate try/except blocks
+    "Exception", "BaseException", "ValueError", "TypeError",
+    "KeyError", "IndexError", "AttributeError", "RuntimeError",
+    "ZeroDivisionError", "StopIteration", "AssertionError",
+    "NameError", "OSError", "IOError",
+    # __import__ is whitelisted but checked at runtime
+    "__import__",
 }
 
 
@@ -176,10 +185,15 @@ class CodeAPISandbox:
             return ".".join(reversed(parts))
         return None
 
-    def execute(self, code: str, context: Optional[dict] = None) -> SandboxResult:
+    def execute(self, code: str, context: Optional[dict] = None,
+                timeout: float = 30.0) -> SandboxResult:
         """
         Execute code in restricted sandbox.
         Returns SandboxResult with stdout, stderr, return value, errors.
+
+        `timeout` (default 30s) caps wall-clock execution via SIGALRM
+        (Unix main-thread only). On Windows or in sub-threads the timeout
+        is a no-op and the caller must enforce external limits.
         """
         # First, static check
         check = self.static_check(code)
@@ -213,6 +227,22 @@ class CodeAPISandbox:
         stderr_buf = io.StringIO()
 
         result = SandboxResult(verdict=SandboxVerdict.ALLOW)
+        # Wall-clock timeout via SIGALRM (Unix only, main thread). Restores
+        # any previously-installed handler on exit/exception.
+        import signal as _signal
+        prev_handler = _signal.getsignal(_signal.SIGALRM)
+        use_alarm = (
+            timeout > 0
+            and prev_handler in (_signal.SIG_DFL, _signal.SIG_IGN, None)
+        )
+
+        def _on_alarm(signum, frame):
+            raise TimeoutError(f"sandbox code exceeded {timeout}s timeout")
+
+        if use_alarm:
+            _signal.signal(_signal.SIGALRM, _on_alarm)
+            _signal.setitimer(_signal.ITIMER_REAL, timeout)
+
         try:
             with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
                 # Wrap in a function to capture return value
@@ -228,6 +258,9 @@ class CodeAPISandbox:
         except Exception as e:
             result.error = f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
         finally:
+            if use_alarm:
+                _signal.setitimer(_signal.ITIMER_REAL, 0)  # disarm
+                _signal.signal(_signal.SIGALRM, prev_handler)
             result.stdout = stdout_buf.getvalue()
             result.stderr = stderr_buf.getvalue()
 

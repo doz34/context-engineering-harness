@@ -161,6 +161,11 @@ class StateDB:
         """
         Append audit event, return hash.
         QW-S3-8: Uses RotatingHMAC for forward secrecy.
+
+        The read-prev-hash and insert-new-event are now wrapped in a
+        single BEGIN/COMMIT transaction to prevent TOCTOU races between
+        concurrent appenders (the previous two-`with` layout left a
+        window where a parallel writer could fork the chain).
         """
         import hashlib
         # Try to use RotatingHMAC (QW-S3-8)
@@ -172,53 +177,50 @@ class StateDB:
         except (ImportError, AttributeError, Exception):
             rh = None
 
-        if rh is not None:
-            # Use RotatingHMAC
-            with self.conn() as c:
+        with self.conn() as c:
+            # Single transaction: read prev_hash (if not given), sign, insert.
+            # SQLite serializes writes at the database level; BEGIN ensures
+            # the read and the insert are not interleaved with another writer.
+            c.execute("BEGIN IMMEDIATE")
+            try:
                 if not prev_hash:
                     row = c.execute(
                         "SELECT hash FROM audit_event ORDER BY id DESC LIMIT 1"
                     ).fetchone()
                     prev_hash = row[0] if row else ""
-            # Sign with RotatingHMAC
-            event = rh.sign(
-                payload=json.dumps(payload),
-                prev_hash=prev_hash,
-            )
-            h = event["hash"]
-            # Store the full signed event (with epoch_id for verification)
-            with self.conn() as c:
-                c.execute(
-                    "INSERT INTO audit_event (ts, event_type, payload, prev_hash, hash) "
-                    "VALUES (datetime('now'), ?, ?, ?, ?)",
-                    (event_type, json.dumps({
+
+                if rh is not None:
+                    event = rh.sign(
+                        payload=json.dumps(payload),
+                        prev_hash=prev_hash,
+                    )
+                    h = event["hash"]
+                    c.execute(
+                        "INSERT INTO audit_event (ts, event_type, payload, prev_hash, hash) "
+                        "VALUES (datetime('now'), ?, ?, ?, ?)",
+                        (event_type, json.dumps({
+                            "payload": payload,
+                            "ts": event["ts"],
+                            "epoch_id": event["epoch_id"],
+                        }), prev_hash, h)
+                    )
+                else:
+                    # Fallback: simple SHA-256 (legacy mode)
+                    event = {
+                        "ts": "datetime('now')",
+                        "type": event_type,
                         "payload": payload,
-                        "ts": event["ts"],
-                        "epoch_id": event["epoch_id"],
-                    }), prev_hash, h)
-                )
-            return h
-        else:
-            # Fallback: simple SHA-256 (legacy mode)
-            event = {
-                "ts": "datetime('now')",
-                "type": event_type,
-                "payload": payload,
-                "prev_hash": prev_hash,
-            }
-            with self.conn() as c:
-                if not prev_hash:
-                    row = c.execute(
-                        "SELECT hash FROM audit_event ORDER BY id DESC LIMIT 1"
-                    ).fetchone()
-                    prev_hash = row[0] if row else ""
-                    event["prev_hash"] = prev_hash
-            content = json.dumps(event, sort_keys=True).encode()
-            h = hashlib.sha256(content).hexdigest()
-            with self.conn() as c:
-                c.execute(
-                    "INSERT INTO audit_event (ts, event_type, payload, prev_hash, hash) "
-                    "VALUES (datetime('now'), ?, ?, ?, ?)",
-                    (event_type, json.dumps(payload), prev_hash, h)
-                )
-            return h
+                        "prev_hash": prev_hash,
+                    }
+                    content = json.dumps(event, sort_keys=True).encode()
+                    h = hashlib.sha256(content).hexdigest()
+                    c.execute(
+                        "INSERT INTO audit_event (ts, event_type, payload, prev_hash, hash) "
+                        "VALUES (datetime('now'), ?, ?, ?, ?)",
+                        (event_type, json.dumps(payload), prev_hash, h)
+                    )
+                c.execute("COMMIT")
+            except Exception:
+                c.execute("ROLLBACK")
+                raise
+        return h
