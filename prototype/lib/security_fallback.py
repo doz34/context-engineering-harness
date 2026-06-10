@@ -1,8 +1,24 @@
 """
 Security Fallback — when cryptography lib is not available.
-Provides AES-256-CTR + HMAC-SHA256 (encrypt-then-MAC).
-This is NOT as secure as AES-GCM (vulnerable to nonce reuse) but
-acceptable for POV testing without external deps.
+
+⚠️ IMPORTANT — cipher clarification (F-002, audit 2026-06-10):
+This module provides **SHA256-CTR (custom stream cipher) + HMAC-SHA256
+(encrypt-then-MAC)** — NOT AES-256-CTR. The original docstring used the
+"AES-256-CTR" label, which was misleading: a true AES-256-CTR requires
+the `cryptography` (or `pycryptodome`) library, and the stdlib does not
+ship AES. To stay zero-dependency, we use a SHA256-based stream cipher
+that is functionally similar to AES-CTR (XOR with a keystream) but is
+NOT certified as a block cipher.
+
+Limitations (acceptable for POV when cryptography is unavailable):
+- Not AES: do NOT use where AES compliance is required (FIPS, RGPD, etc.)
+- Vulnerable to nonce reuse: never reuse (key, nonce) pair
+- Slower than hardware AES: ~1 SHA256 per 32 bytes (manual CTR)
+- Unaudited cipher: prefer `cryptography.AESGCM` when available
+
+Use `lib.security.EncryptedDB.is_secure()` to check whether AESGCM is
+active. The fallback path is only a degraded mode for environments
+where `cryptography` cannot be installed.
 """
 
 import hashlib

@@ -210,6 +210,69 @@ def test_hook_system_audit_report():
     assert "ALLOW" in report
 
 
+# === F-006 audit 2026-06-10: timestamp path-traversal sanitization ===
+
+def test_clear_result_blocks_timestamp_traversal():
+    """A timestamp like '../../etc/cron.daily/payload' must NOT escape
+    the .ctxh/tool_results/ directory."""
+    with tempfile.TemporaryDirectory() as d:
+        os.chdir(d)
+        long_result = "X" * 500  # > 400 to trigger offload
+        ctx = HookContext(
+            event=HookEvent.POST_TOOL_USE,
+            payload={},
+            tool_name="Bash",
+            tool_args={},
+            tool_result=long_result,
+            timestamp="../../etc/cron.daily/payload",
+        )
+        r = post_tool_use_clear_result(ctx)
+        assert r.decision == HookDecision.CLEAR
+        # The offload path should be inside .ctxh/tool_results/
+        ref = r.modified_payload.get("tool_result_full_ref", "")
+        assert ref.startswith(".ctxh/tool_results/"), (
+            f"path traversal not blocked: {ref!r}"
+        )
+        # No `..` segments should remain
+        assert ".." not in ref.replace(".ctxh/tool_results/", ""), (
+            f"path still contains traversal: {ref!r}"
+        )
+
+
+# === F-008 audit 2026-06-10: deterministic PII tokenization via singleton ===
+
+def test_pii_tokenize_uses_singleton():
+    """Two calls with the same PII value must produce the same token
+    (deterministic via shared singleton)."""
+    from lib.hooks import post_tool_use_pii_tokenize
+    from lib.pii_tokenizer import get_tokenizer
+
+    # Reset the singleton to guarantee a fresh salt
+    import lib.pii_tokenizer as pt_mod
+    pt_mod._default_tokenizer = None
+
+    text = "Email: alice@example.com"
+    ctx1 = HookContext(
+        event=HookEvent.POST_TOOL_USE, payload={},
+        tool_name="t1", tool_args={}, tool_result=text, timestamp="t1",
+    )
+    ctx2 = HookContext(
+        event=HookEvent.POST_TOOL_USE, payload={},
+        tool_name="t2", tool_args={}, tool_result=text, timestamp="t2",
+    )
+    r1 = post_tool_use_pii_tokenize(ctx1)
+    r2 = post_tool_use_pii_tokenize(ctx2)
+    # Both should MODIFY the payload with the same token
+    if r1.decision == HookDecision.MODIFY and r2.decision == HookDecision.MODIFY:
+        t1 = r1.modified_payload["tool_result"]
+        t2 = r2.modified_payload["tool_result"]
+        assert t1 == t2, f"non-deterministic tokens: {t1!r} vs {t2!r}"
+    else:
+        raise AssertionError(
+            f"Expected both MODIFY, got {r1.decision}/{r2.decision}"
+        )
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

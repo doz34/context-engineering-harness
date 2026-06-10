@@ -111,7 +111,22 @@ class StateDB:
                      direction: str, tokens: int,
                      model: str = "", agent: str = "",
                      metadata: dict = None) -> int:
-        """Record a token event, return current phase total."""
+        """Record a token event, return current phase total.
+
+        Raises ValueError if `tokens` is negative or non-integer (F-003
+        audit 2026-06-10). Without this check, a sub-agent or bug could
+        call `record_token(-999999)` to silently decrement the phase
+        budget and bypass the soft/hard cap enforcement.
+        """
+        if not isinstance(tokens, int) or isinstance(tokens, bool):
+            raise ValueError(
+                f"tokens must be int, got {type(tokens).__name__}: {tokens!r}"
+            )
+        if tokens < 0:
+            raise ValueError(
+                f"tokens must be >= 0 (got {tokens}). Negative events would "
+                f"decrement the phase budget and bypass soft/hard caps."
+            )
         with self.conn() as c:
             c.execute(
                 "INSERT INTO token_event (ts, phase_id, component, direction, "
@@ -168,13 +183,22 @@ class StateDB:
         window where a parallel writer could fork the chain).
         """
         import hashlib
+        import logging
         # Try to use RotatingHMAC (QW-S3-8)
         rh = None
         try:
             from lib.security import RotatingHMAC, load_or_create_master_key
             key = load_or_create_master_key(self.path + ".master")
             rh = RotatingHMAC(key)
-        except (ImportError, AttributeError, Exception):
+        except (ImportError, AttributeError) as e:
+            # F-011 audit 2026-06-10: was `except (..., Exception)` which
+            # swallowed ALL errors silently. Now narrow + log so the
+            # fallback is observable.
+            logging.getLogger(__name__).warning(
+                "RotatingHMAC unavailable, falling back to legacy SHA-256 "
+                "audit chain (no forward secrecy): %s",
+                e,
+            )
             rh = None
 
         with self.conn() as c:
@@ -224,3 +248,127 @@ class StateDB:
                 c.execute("ROLLBACK")
                 raise
         return h
+
+    def verify_audit_chain(
+        self,
+        master_key_path: Optional[str] = None,
+        strict_epoch: bool = True,
+    ) -> dict:
+        """Walk the audit_event table and verify HMAC chain integrity (F-004).
+
+        Returns a dict with keys:
+          - `ok` (bool): True if the entire chain is valid
+          - `checked` (int): number of events verified
+          - `first_invalid_id` (int or None): id of first broken event
+          - `reason` (str or None): human-readable failure cause
+          - `fallback` (bool): True if RotatingHMAC was unavailable and the
+            legacy SHA-256 chain was checked instead (no forward secrecy)
+
+        The check is end-to-end:
+          1. Each event's hash is recomputed from (ts, epoch_id, payload,
+             prev_hash) using the epoch-specific derived key.
+          2. Each event's `prev_hash` must equal the previous event's
+             `hash` (chain integrity).
+          3. If `strict_epoch=True` (default), the event's `epoch_id` must
+             be within the current or previous epoch (rejects pre-computed
+             forgeries from the far past or future).
+
+        Limitations:
+          - Requires `audit_event.payload` to be JSON-encoded with `payload`,
+            `ts`, `epoch_id` keys (the RotatingHMAC mode). Events written by
+            the legacy SHA-256 fallback path are not verifiable with the
+            rotating key and will be reported as `fallback=True`.
+          - The chain is append-only; there is no recovery from tampering
+            other than rejecting the chain (`ok=False`).
+        """
+        result = {
+            "ok": True,
+            "checked": 0,
+            "first_invalid_id": None,
+            "reason": None,
+            "fallback": False,
+        }
+        # Try to obtain RotatingHMAC
+        rh = None
+        try:
+            from lib.security import RotatingHMAC, load_or_create_master_key
+            key_path = master_key_path or (self.path + ".master")
+            key = load_or_create_master_key(key_path)
+            rh = RotatingHMAC(key)
+        except (ImportError, AttributeError):
+            result["fallback"] = True
+            result["reason"] = (
+                "RotatingHMAC unavailable; cannot perform epoch-aware "
+                "verification. Re-run with `cryptography` installed."
+            )
+            return result
+
+        with self.conn() as c:
+            rows = c.execute(
+                "SELECT id, payload, prev_hash, hash FROM audit_event "
+                "ORDER BY id ASC"
+            ).fetchall()
+
+        prev_hash_expected = ""
+        for row in rows:
+            rid, payload_blob, prev_hash, hash_value = row
+            try:
+                # payload is JSON-encoded {payload, ts, epoch_id}
+                payload_dict = json.loads(payload_blob)
+                epoch_id = int(payload_dict.get("epoch_id", "0"))
+                ts = str(payload_dict.get("ts", ""))
+                # F-004 audit 2026-06-10: the signed event used
+                # `json.dumps(payload)` — a string — but the stored
+                # `payload` column holds the raw dict. To match what was
+                # actually HMAC'd, re-serialize here (sort_keys=True so
+                # the order is deterministic).
+                raw_payload = payload_dict.get("payload", "")
+                if isinstance(raw_payload, dict):
+                    inner_payload = json.dumps(raw_payload, sort_keys=True)
+                else:
+                    inner_payload = str(raw_payload)
+            except (json.JSONDecodeError, ValueError, TypeError) as e:
+                result.update({
+                    "ok": False,
+                    "first_invalid_id": rid,
+                    "reason": f"Malformed payload JSON: {e}",
+                })
+                return result
+
+            # Reconstruct event and verify. F-004 audit 2026-06-10:
+            # we MUST include the `hash` field from the DB row, otherwise
+            # `rh.verify` will compare the recomputed hash against "" and
+            # the chain will always appear broken.
+            event = {
+                "ts": ts,
+                "epoch_id": str(epoch_id),
+                "payload": inner_payload,
+                "prev_hash": prev_hash,
+                "hash": hash_value,
+            }
+            if not rh.verify(event, strict_epoch=strict_epoch):
+                result.update({
+                    "ok": False,
+                    "first_invalid_id": rid,
+                    "reason": (
+                        f"HMAC mismatch or epoch out of range "
+                        f"(epoch_id={epoch_id}, strict={strict_epoch})"
+                    ),
+                })
+                return result
+
+            # Chain integrity: prev_hash must match previous row's hash
+            if prev_hash != prev_hash_expected:
+                result.update({
+                    "ok": False,
+                    "first_invalid_id": rid,
+                    "reason": (
+                        f"Chain break: prev_hash={prev_hash!r} != "
+                        f"expected {prev_hash_expected!r}"
+                    ),
+                })
+                return result
+            prev_hash_expected = hash_value
+            result["checked"] += 1
+
+        return result

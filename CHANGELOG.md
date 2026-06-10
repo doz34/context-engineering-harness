@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ---
 
+## [1.0.3] — 2026-06-10
+
+### 🔒 Security & quality fixes from fresh-eyes audit
+
+Fresh-eyes adversarial audit (`audit/fresh-eyes-v102/`) identified 26 findings across 12 quality dimensions (1 CRIT, 5 HIGH, 7 MED, 13 LOW). This release closes the 1 CRIT + 5 HIGH + 2 easy MED.
+
+### Fixed
+
+- **F-001 [CRIT]** — Dogfooding failure: the project's own CI used `actions/checkout@v4` and `actions/setup-python@v5` (mutable tags) while `lib/ci_cd_pinning.py` is designed to refuse exactly these. Both actions are now pinned to their v4.2.2 and v5.3.0 commit SHAs, and a new CI step runs `validate_workflow_file` on itself (fails CI if anyone re-introduces a mutable tag).
+- **F-002 [HIGH]** — `lib/security_fallback.py` docstring claimed "AES-256-CTR + HMAC-SHA256" but the implementation is actually a custom SHA256-CTR (stdlib has no AES). Docstring corrected to reflect the real cipher and warn against use where AES compliance is required.
+- **F-003 [HIGH]** — `StateDB.record_token` accepted negative integers, letting a sub-agent or bug call `record_token(-999999)` to silently decrement the phase budget and bypass soft/hard caps. Now raises `ValueError` on negative or non-int `tokens`.
+- **F-004 [HIGH]** — Added `StateDB.verify_audit_chain()` method that walks the `audit_event` table and re-verifies each event's HMAC with the epoch-specific derived key, plus checks the `prev_hash` chain integrity. The `RotatingHMAC.verify` method existed but was never called on stored events. The state DB is now actually auditable end-to-end.
+- **F-006 [HIGH]** — `post_tool_use_clear_result` sanitized `tool_name` but not `ctx.timestamp`. A caller-controlled timestamp like `../../etc/cron.daily/payload` would escape the `.ctxh/tool_results/` directory. Both fields are now sanitized and any name still containing `..` after regex stripping is replaced with a SHA-256 hash.
+- **F-008 [MED]** — `post_tool_use_pii_tokenize` was creating a fresh `PIITokenizer()` per call, generating a new random salt each time. The same email would tokenize to a different token across calls, breaking deterministic tokenization. Now uses the module-level `get_tokenizer()` singleton.
+- **F-011 [MED]** — `StateDB.append_audit` had `except (ImportError, AttributeError, Exception)` which silently swallowed ALL errors. Narrowed to `(ImportError, AttributeError)` and added a `logging.warning` so the legacy-SHA-256 fallback is now observable.
+
+### Tests
+
+- 318 → **324 tests** (+6 new: F-003 negative tokens, F-003 non-int tokens, F-004 clean chain verify, F-004 tamper detection, F-006 path-traversal block, F-008 deterministic tokenization). All pass in 7.86s.
+
+### CI
+
+- `actions/checkout` and `actions/setup-python` pinned to commit SHAs.
+- Python 3.13 added to the test matrix.
+- New "Self-audit" step runs `ci_cd_pinning.validate_workflow_file` on its own workflow (dogfooding enforcement).
+
+### Changed
+
+- `lib/security_fallback.py` — module docstring rewritten to clearly state the cipher is SHA256-CTR (not AES). No code change.
+- `lib/state.py` — `record_token` now validates input; `append_audit` narrowed except + log; new `verify_audit_chain` method.
+- `lib/hooks.py` — `post_tool_use_clear_result` hardens path sanitization; `post_tool_use_pii_tokenize` uses singleton tokenizer.
+- `.github/workflows/tests.yml` — actions SHA-pinned, dogfooding audit step added, Python 3.13 added.
+
+---
+
+## [1.0.2] — 2026-06-10
+
+### 🐛 14 latent bugs from fresh-eyes audit
+
+Closed 14 user-facing bugs that the 4 prior adversarial passes had missed (install/demo/CLI crashes, regex bypasses, fallback paths).
+
+See commit `6b052ea` for the full diff.
+
+---
+
 ## [1.0.0] — 2026-06-09
 
 ### 🎉 First stable release

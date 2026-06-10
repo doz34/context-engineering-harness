@@ -128,7 +128,25 @@ def post_tool_use_clear_result(ctx: HookContext) -> HookResult:
         safe_name = "tool_" + hashlib.sha256(
             (ctx.tool_name or "").encode()
         ).hexdigest()[:8]
-    full_path = f".ctxh/tool_results/{safe_name}_{ctx.timestamp}.txt"
+    # F-006 audit 2026-06-10: also sanitize ctx.timestamp. Previously
+    # this was inserted verbatim into the path, allowing a caller-
+    # controlled value like "../../../etc/cron.daily/payload" to escape
+    # the .ctxh/tool_results/ directory. Note: stripping non-[A-Za-z0-9_.-]
+    # chars is NOT enough because dots are allowed and a value like
+    # "../../etc" becomes ".._.._etc" which still contains ".." segments.
+    # We additionally reject any name that contains a ".." substring and
+    # fall back to a hash.
+    safe_ts = re.sub(r"[^A-Za-z0-9_.-]", "_", ctx.timestamp or "")
+    if not safe_ts or ".." in safe_ts:
+        safe_ts = "ts_" + hashlib.sha256(
+            (ctx.timestamp or "").encode()
+        ).hexdigest()[:8]
+    # Same hardening for safe_name (in case a tool_name also contains "..")
+    if ".." in safe_name:
+        safe_name = "tool_" + hashlib.sha256(
+            (ctx.tool_name or "").encode()
+        ).hexdigest()[:8]
+    full_path = f".ctxh/tool_results/{safe_name}_{safe_ts}.txt"
     cleared = (
         f"{head}\n... [CLEARED: {len(full) - 400} chars offloaded to "
         f"{full_path}] ...\n{tail}"
@@ -210,9 +228,12 @@ def post_tool_use_pii_tokenize(ctx: HookContext) -> HookResult:
     if not ctx.tool_result:
         return HookResult(decision=HookDecision.ALLOW, silent=True)
 
-    # Lazy import
-    from .pii_tokenizer import PIITokenizer
-    tokenizer = PIITokenizer()
+    # F-008 audit 2026-06-10: use the module-level singleton so the
+    # same PII value maps to the same token across calls. Previously
+    # a new PIITokenizer (with a fresh random salt) was created per
+    # call, breaking deterministic tokenization.
+    from .pii_tokenizer import get_tokenizer
+    tokenizer = get_tokenizer()
     tokenized, mappings = tokenizer.tokenize(ctx.tool_result)
 
     if mappings:
