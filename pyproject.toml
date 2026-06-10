@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ce-harness"
+version = "1.1.0"
+description = "Context Engineering Harness for LLM agents — token economy, isolation, adversarial testing"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "CE-Harness Contributors"}]
+keywords = ["llm", "agents", "context-engineering", "harness", "token-budget", "subagent-firewall"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Security",
+]
+
+[project.optional-dependencies]
+crypto = ["cryptography>=42.0"]
+dev = ["pytest>=7.0", "pytest-cov>=4.0", "cryptography>=42.0"]
+
+[project.scripts]
+ctxh = "lib.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["prototype"]
+
+[tool.pytest.ini_options]
+testpaths = ["prototype/tests"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["prototype/lib"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true

@@ -9,6 +9,7 @@ and tokenizes PII before it reaches the model".
 """
 
 import re
+import os
 import hashlib
 import html
 import secrets
@@ -283,22 +284,43 @@ class PIITokenizer:
 
 # Singleton for the harness
 _default_tokenizer = None
+_DEFAULT_SALT_PATH = os.path.join(".ctxh", "pii.salt")
+
+
+def _load_or_create_salt(salt_path: str = _DEFAULT_SALT_PATH) -> str:
+    """Load salt from file, or generate and persist one (v1.1).
+
+    The salt file is created with 0o600 permissions. If the file
+    doesn't exist yet or the directory hasn't been created yet,
+    a new 16-byte hex salt is generated. If the directory exists,
+    the salt is persisted for cross-process determinism.
+    """
+    if os.path.exists(salt_path):
+        with open(salt_path, "r") as f:
+            content = f.read().strip()
+            if content:
+                return content
+    salt = secrets.token_hex(16)
+    # Only persist if the parent directory exists (ctxh init creates it)
+    parent = os.path.dirname(salt_path)
+    if parent and os.path.isdir(parent):
+        with open(salt_path, "w") as f:
+            f.write(salt)
+        os.chmod(salt_path, 0o600)
+    return salt
 
 
 def get_tokenizer(salt: str = None) -> PIITokenizer:
     """Get the singleton PII tokenizer.
 
-    HIGH fix 2026-06-10: callers can now pass an explicit `salt`
-    to ensure the same salt is used across restarts. This makes
-    the tokenization DETERMINISTIC across processes (previous
-    behavior generated a new random salt per process, breaking
-    cross-day referential integrity for archive analytics).
-
-    For production, persist the salt in the state DB or in a
-    dedicated file (`./.ctxh/pii.salt`) and pass it explicitly.
+    v1.1: when no explicit salt is provided, auto-loads from
+    `.ctxh/pii.salt` (creating it if needed). This ensures
+    deterministic tokens across process restarts.
     """
     global _default_tokenizer
     if _default_tokenizer is None:
+        if salt is None:
+            salt = _load_or_create_salt()
         _default_tokenizer = PIITokenizer(salt=salt)
     return _default_tokenizer
 
