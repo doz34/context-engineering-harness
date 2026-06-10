@@ -27,7 +27,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install pytest
+        pip install pytest pytest-cov
 
     - name: Self-audit (validate workflow is SHA-pinned)
       # Dogfooding F-001 (audit 2026-06-10) - this workflow enforces
@@ -52,6 +52,15 @@ jobs:
         cd prototype
         python -m pytest tests/ -v
 
+    - name: Coverage gate (HIGH fix 2026-06-10)
+      # Refuses the build if lib/ coverage falls below 80%. Previous
+      # workflow had no coverage gate, so a regression in lib/
+      # (e.g. a new module that drops security_fallback-style
+      # cipher to 19% coverage) was invisible to CI.
+      run: |
+        cd prototype
+        python -m pytest tests/ --cov=lib --cov-report=term-missing --cov-fail-under=80
+
     - name: Run adversarial tests separately
       run: |
         cd prototype
@@ -61,7 +70,19 @@ jobs:
       run: |
         bash prototype/bin/install.sh
 
-    - name: Run demo
+    - name: Run demo (CRIT fix 2026-06-10: assert e2e passes)
+      # The demo's spawn-and-verify path now uses
+      # firewall.last_sub_id (not hard-coded 'sub_1'), and an
+      # end-to-end test asserts is_valid: True. This step greps
+      # the demo output to ensure the audit passed; if not, CI
+      # fails loudly instead of printing a false negative and
+      # exiting 0.
       run: |
         cd prototype
-        bash bin/ctxh-demo 2>&1 | head -50
+        bash bin/ctxh-demo 2>&1 | tee /tmp/demo.out
+        if grep -q "is_valid: True" /tmp/demo.out; then
+          echo "✅ Demo e2e audit passed"
+        else
+          echo "❌ Demo e2e audit did NOT show is_valid: True — see /tmp/demo.out"
+          exit 1
+        fi

@@ -164,10 +164,22 @@ class RotatingHMAC:
     """
     HMAC chain with rotating keys per epoch.
 
-    Forward secrecy: compromising key at epoch E doesn't compromise
-    epoch E+1 (different derived key). Past events (epoch E-1, E-2)
-    are still verifiable.
-
+    **NOTE (CRIT fix 2026-06-10 — relabeled honestly):** what this
+    module provides is **epoch compartmentalization**, NOT
+    *forward secrecy* in the cryptographic sense. The master key
+    derives all epoch keys via PBKDF2, so a master-key compromise
+    trivially yields every epoch key. True forward secrecy requires
+    ephemeral key agreement (Diffie-Hellman ratchet, Signal-style
+    double-ratchet, or PFS TLS ciphersuites). The protection this
+    module actually offers is:
+    - Old audit events are still verifiable with the historical
+      epoch key (rotation does not invalidate the chain).
+    - Two consecutive epochs use different derived keys, so a
+      leak confined to one epoch's working memory does not
+      automatically expose other epochs.
+    - Master-key compromise does, however, expose everything.
+      For incident response, rotate the master key, not the
+      epoch.
     Pattern inspired by Cossack Labs + ACME (Let's Encrypt) + Roughtime.
     """
 

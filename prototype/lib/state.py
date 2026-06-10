@@ -175,7 +175,9 @@ class StateDB:
                      prev_hash: str = "") -> str:
         """
         Append audit event, return hash.
-        QW-S3-8: Uses RotatingHMAC for forward secrecy.
+        QW-S3-8: Uses RotatingHMAC for *epoch compartmentalization*
+        (NOT forward secrecy in the crypto sense — see RotatingHMAC
+        docstring; relabeled 2026-06-10 after adversarial review).
 
         The read-prev-hash and insert-new-event are now wrapped in a
         single BEGIN/COMMIT transaction to prevent TOCTOU races between

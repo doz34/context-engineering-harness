@@ -110,6 +110,83 @@ def test_mutant_dataclass():
     assert m.operator == "AOR"
 
 
+def test_simulate_test_run_deterministic():
+    """CRIT fix 2026-06-10: simulate_test_run is now deterministic
+    (no random.random()). Same input always yields same output."""
+    from lib.mutation_testing import simulate_test_run
+
+    m = Mutant(id="x", line=1, column=0, original="a + b", mutated="a - b", operator="AOR")
+
+    # Empty test source → survives (conservative default)
+    r1 = simulate_test_run(m, test_source="")
+    r2 = simulate_test_run(m, test_source="")
+    assert r1 == r2 == "survived", "Empty test source must be deterministic"
+
+    # Test source without the operator keyword → survives
+    r3 = simulate_test_run(m, test_source="def test_x():\n    pass")
+    assert r3 == "survived", "No operator mention in test → survive"
+
+    # Test source with AOR operator keyword ('+', '-', '*', '/', '%')
+    # AND assert → killed (deterministic).
+    r4 = simulate_test_run(
+        m,
+        test_source="def test_x():\n    # arithmetic: 1 + 2\n    assert 1 + 2 == 3",
+    )
+    r5 = simulate_test_run(
+        m,
+        test_source="def test_x():\n    # arithmetic: 1 + 2\n    assert 1 + 2 == 3",
+    )
+    assert r4 == r5 == "killed", (
+        f"Operator + assert in test → kill (got r4={r4!r}, r5={r5!r})"
+    )
+
+    # Many runs in a row produce the same result (no coin flip)
+    for _ in range(20):
+        assert simulate_test_run(m, test_source="") == "survived"
+        assert simulate_test_run(
+            m, test_source="def test_x():\n    assert arithmetic(1+2) == 3"
+        ) == "killed"
+
+
+def test_run_mutation_testing_uses_test_source():
+    """run_mutation_testing now takes test_source and uses it to
+    determine kill/survive deterministically."""
+    source_with_arithmetic = """
+def add(a, b):
+    return a + b
+"""
+    # No test source → all mutants survive (conservative)
+    r_no_test = run_mutation_testing(source_with_arithmetic)
+    # With test source that has arithmetic + assert → mutants killed
+    r_with_test = run_mutation_testing(
+        source_with_arithmetic,
+        test_source="def test_add():\n    assert add(1, 2) == 3",
+    )
+    # The with-test version should have a higher score than the no-test
+    # version (deterministic, not a coin flip).
+    assert r_with_test.score >= r_no_test.score
+    # And both runs of the same inputs should give the same score
+    r_no_test_2 = run_mutation_testing(source_with_arithmetic)
+    r_with_test_2 = run_mutation_testing(
+        source_with_arithmetic,
+        test_source="def test_add():\n    assert add(1, 2) == 3",
+    )
+    assert r_no_test.score == r_no_test_2.score
+    assert r_with_test.score == r_with_test_2.score
+
+
+def test_no_random_import():
+    """The `random` module must no longer be imported in mutation_testing
+    (CRIT fix 2026-06-10)."""
+    import importlib
+    import lib.mutation_testing as mt
+    importlib.reload(mt)
+    assert not hasattr(mt, "random"), (
+        "mutation_testing must not import `random` — the previous "
+        "`random.random()` based kill/survive decision was a coin flip"
+    )
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

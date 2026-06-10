@@ -153,11 +153,18 @@ class MemoryStore:
         return True
 
     def delete(self, block_id: str, principal: str) -> bool:
+        """Delete a block. ACL rows are removed FIRST so the FK on
+        memory_acl.block_id doesn't fire an IntegrityError (CRIT fix
+        2026-06-10 — previous order silently failed for owners)."""
         if not self._check_permission(block_id, principal, "delete"):
             raise PermissionError(f"Principal '{principal}' has no delete access to '{block_id}'")
         with self._connect() as c:
-            c.execute("DELETE FROM memory_blocks WHERE id = ?", (block_id,))
+            # Delete child rows (ACL) before parent (block) to avoid FK
+            # constraint violation. SQLite requires foreign_keys=ON
+            # (enabled in _connect) to enforce this; without it, the
+            # block would be deleted and orphan ACL rows would remain.
             c.execute("DELETE FROM memory_acl WHERE block_id = ?", (block_id,))
+            c.execute("DELETE FROM memory_blocks WHERE id = ?", (block_id,))
         return True
 
     def list_blocks(self, principal: str) -> List[Dict]:

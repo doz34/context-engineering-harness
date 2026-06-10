@@ -48,15 +48,21 @@ Plus **defense in depth**:
 - `lib/code_api.py` — AST-based code sandbox (anti-escape)
 - `lib/pii_tokenizer.py` — 11 PII patterns, HMAC-SHA256 tokenization
 - `lib/hooks.py` — 7 lifecycle hooks (PreToolUse / PostToolUse / Subagent*)
-- `lib/security.py` — AES-256-GCM encryption at rest + RotatingHMAC (forward secrecy)
+- `lib/security.py` — AES-256-GCM encryption for `SecretsVault` at rest + RotatingHMAC (epoch compartmentalization — **NOT cryptographic forward secrecy**; relabeled honestly 2026-06-10)
 - `lib/mcp_trust.py` — MCP server SHA-256 pinning (TOFU + signing)
 - `lib/ci_cd_pinning.py` + `lib/image_pin.py` — CI/CD + container image pinning
 - `lib/secrets_vault.py` — Encrypted secrets vault (vs env vars)
-- `lib/mutation_testing.py` — Refuses PASS if mutation score < 0.7
+- `lib/mutation_testing.py` — Static-heuristic mutation score gate; for real mutation testing use `mutmut`/`cosmic-ray` (relabeled honestly 2026-06-10 — previous `random.random()` removed)
 - `lib/archive_anonymizer.py` — GDPR Art. 17 compliance
 - `lib/s3_residual.py` — Per-tenant keys, CAB approver immutability, EOL HMAC
 - `lib/adversarial_corpus.py` — 50+ attack payloads for testing
-- `lib/property_tests.py` — Property-based invariants
+- `lib/property_tests.py` — Property-based invariants (4 properties, static heuristics)
+
+> **What is NOT covered in v1.0.3** (honest scope statement, 2026-06-10):
+> - `state.db` is plaintext SQLite. The `EncryptedDB` wrapper exists and is used by `SecretsVault` (secrets are encrypted at rest), but the main audit/state DB is not. Production deployment with sensitive context must layer LUKS/SQLCipher around it.
+> - The 5-layer architecture diagram in `design/00-architecture.md` is **partially aspirational**: L0/L1/L2 are real runtime modules; L3 (working context) and L4 (curated LLM view) are **not implemented as modules** yet — only the data shapes are defined.
+> - The "code-as-API" pattern is a sandboxed AST interpreter; full 98.7% economy from Anthropic's article requires Docker/OS-level isolation, not in-process AST checks.
+> - Property-based tests cover 4 properties (DSL roundtrip, PII idempotence, subagent strict, SHA-256 format). The "8 invariants" are not all property-tested.
 
 ---
 
@@ -138,41 +144,44 @@ cd prototype && python3 -m pytest tests/ -v
 
 ## 🏗 Architecture
 
-### 5-layer model
+### 5-layer model (PARTIALLY ASPIRATIONAL — see honest scope above)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ L0  Corpus (offline)                                    │
+│ L0  Corpus (offline) — REAL ✅                          │
 │    • skills/, playbooks/, distilled knowledge           │
 │    • Always via tool call, never injected in bulk       │
 ├─────────────────────────────────────────────────────────┤
-│ L1  Memory Blocks (MemGPT-style, addressable)            │
+│ L1  Memory Blocks (MemGPT-style, addressable) — REAL ✅  │
 │    • persona, facts, episodic, semantic, procedural,    │
 │      scratchpad                                          │
 │    • Per-tenant keys, ACL, tamper detection            │
 ├─────────────────────────────────────────────────────────┤
-│ L2  Phase / Session State (typed, queryable)            │
+│ L2  Phase / Session State (typed, queryable) — REAL ✅  │
 │    • SQLite WAL with HMAC-chained audit log             │
 │    • Token ledger (live, per-component, per-phase)      │
 │    • Playbook ACE (versioned, dedup)                    │
 ├─────────────────────────────────────────────────────────┤
-│ L3  Working Context (token-budgeted, structured)         │
+│ L3  Working Context (token-budgeted, structured)        │
+│    — ASPIRATIONAL ⚠️ (data shapes defined, no module)   │
 │    • 4-pillars Write/Select/Compress/Isolate           │
 │    • Pre-hydrate at phase start                         │
 │    • Head/tail protection (lost-in-the-middle)         │
 ├─────────────────────────────────────────────────────────┤
-│ L4  Immediate LLM view (curated, head/tail-protected)    │
+│ L4  Immediate LLM view (curated, head/tail-protected)   │
+│    — ASPIRATIONAL ⚠️ (no module, no runtime)            │
 │    • Gate active, constraints, key facts                 │
 │    • Adversarial findings (tail)                        │
 │    • Recent decisions (tail)                            │
 └─────────────────────────────────────────────────────────┘
         ↓ enforced by
 ┌─────────────────────────────────────────────────────────┐
-│ Hooks (7 lifecycle events)                              │
+│ Hooks (7 lifecycle events) — LIBRARY ONLY ⚠️            │
+│   (HOOK_REGISTRY defined, never fired in production)    │
 │ Subagent firewall (isolation, summary-only return)      │
 │ Token ledger (live, 60/70/85/95% triggers)             │
 │ Adversarial gates (T1/T2/T3 + Drew Breunig 4 modes)    │
-│ RotatingHMAC (forward secrecy, 24h epoch)             │
+│ RotatingHMAC (epoch compartmentalization, 24h epoch)   │
 │ ACE playbook engine (self-improving)                  │
 └─────────────────────────────────────────────────────────┘
 ```

@@ -119,6 +119,69 @@ def test_isolation_audit():
         assert "spawn_recorded_at" in audit
 
 
+def test_last_sub_id_exposed():
+    """CRIT fix 2026-06-10: last_sub_id is exposed after spawn so the
+    CLI demo no longer hard-codes 'sub_1' and prints is_valid: False."""
+    with tempfile.TemporaryDirectory() as d:
+        db = StateDB(path=os.path.join(d, "test.db"))
+        ledger = TokenLedger(state=db, verbose=False)
+        ledger.start_phase("p1", "Test", soft_cap=1000, hard_cap=2000)
+        fw = SubagentFirewall(ledger, "p1")
+
+        # Before any spawn, last_sub_id is None
+        assert fw.last_sub_id is None
+
+        brief = SubagentBrief(OBJECT="x", FORMAT="text",
+                              TOOLS="grep", BOUND="in-scope")
+        result = fw.spawn(brief)
+
+        # After spawn, last_sub_id is the real spawn id
+        assert fw.last_sub_id is not None
+        assert fw.last_sub_id.startswith("p1_sub_")
+        # And the audit against this id is valid
+        audit = fw.verify_isolation(fw.last_sub_id)
+        assert audit["is_valid"] is True
+        assert audit["subagent_id"] == fw.last_sub_id
+
+        # Increment: a second spawn yields a new sub_id
+        first = fw.last_sub_id
+        fw.spawn(brief)
+        assert fw.last_sub_id != first
+        assert fw.last_sub_id.endswith("_sub_2")
+
+
+def test_demo_sub_id_matches():
+    """End-to-end test for the demo sub_id bug (CRIT fix 2026-06-10).
+
+    Simulates what `bin/ctxh spawn` does: spawn, then verify_isolation
+    using firewall.last_sub_id (NOT a hard-coded 'sub_1'). The audit
+    must show is_valid: True. Before the fix, the audit printed
+    `is_valid: False` because the hard-coded 'sub_1' didn't match the
+    real spawn id format `{phase_id}_sub_{N}`.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        db = StateDB(path=os.path.join(d, "test.db"))
+        ledger = TokenLedger(state=db, verbose=False)
+        ledger.start_phase("P_DEMO", "Demo", soft_cap=1000, hard_cap=2000)
+        fw = SubagentFirewall(ledger, "P_DEMO")
+
+        brief = SubagentBrief(OBJECT="demo", FORMAT="text",
+                              TOOLS="grep", BOUND="in-scope")
+        fw.spawn(brief)
+
+        # What the CLI does (after fix):
+        audit = fw.verify_isolation(fw.last_sub_id)
+        assert audit["is_valid"] is True, (
+            f"Demo audit failed: is_valid={audit.get('is_valid')} "
+            f"reason={audit.get('reason')}"
+        )
+
+        # What the CLI did BEFORE the fix (regression guard):
+        bad_audit = fw.verify_isolation("sub_1")
+        assert bad_audit["is_valid"] is False
+        assert "no spawn ledger entry" in bad_audit["reason"]
+
+
 if __name__ == "__main__":
     import pytest
     pytest.main([__file__, "-v"])

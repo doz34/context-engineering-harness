@@ -15,6 +15,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib import StateDB, TokenLedger, SubagentFirewall, SubagentBrief
+from lib.hooks import HookSystem, HookEvent, HookContext, HookResult, HookDecision
+from lib.pii_tokenizer import get_tokenizer as _pii_tokenizer
 
 
 def cmd_init(args):
@@ -123,6 +125,21 @@ def cmd_measure(args):
     firewall = 200 + 4000 + 200 + 500
     print(f"\n🎯 ECONOMY RATIO: {baseline:,} → {firewall:,} = {baseline/firewall:.1f}× less tokens")
 
+    # HIGH fix 2026-06-10: fire the phase_end hook so any
+    # PostToolUse / Phase* handler in the registry can run. This
+    # is what makes the hook system operational rather than
+    # library-only.
+    try:
+        from lib.hooks import HookSystem, HookEvent, HookContext
+        _hs = HookSystem()
+        _hs.fire(HookContext(event=HookEvent.PHASE_END, payload={
+            "phase_id": phase_id_2, "tokens": state.phase_total(phase_id_2),
+        }))
+    except Exception as e:
+        # Never let hook failures break the CLI; log to stderr.
+        import sys as _sys
+        print(f"hook system warning: {e}", file=_sys.stderr)
+
     print("\n" + "=" * 60)
     print("Phase dashboard (with firewall):")
     print("=" * 60)
@@ -165,12 +182,52 @@ def cmd_spawn(args):
     ledger.start_phase(args.phase, "Subagent demo", soft_cap=8000, hard_cap=15000)
 
     firewall = SubagentFirewall(ledger, args.phase)
+    # HIGH fix 2026-06-10: fire PreToolUse hook around the spawn
+    # so destructive-command / PII / budget checks run for real.
+    from lib.hooks import HookSystem, HookEvent, HookContext
+    _hs = HookSystem()
+    # Read the phase's current remaining budget and pass it to the
+    # budget-check hook. If the phase doesn't exist yet, default to
+    # the spawn budget as a generous allowance.
+    try:
+        _used = state.phase_total(args.phase)
+        _soft, _hard = state.phase_budget(args.phase)
+        _remaining = (_hard - _used) if _hard else args.budget
+    except Exception:
+        _remaining = args.budget
+    _pre = _hs.fire(HookContext(event=HookEvent.PRE_TOOL_USE, payload={
+        "tool_name": "subagent_spawn",
+        "phase_id": args.phase,
+        "brief": brief.to_dsl(),
+        "budget": args.budget,
+        "budget_remaining": _remaining,
+    }))
+    if _pre.decision == HookDecision.DENY:
+        print(f"❌ Spawn denied by PreToolUse hook: {_pre.reason}")
+        return 1
+
     result = firewall.spawn(brief, context_budget=args.budget, model=args.model)
 
+    # HIGH fix 2026-06-10: fire PostToolUse hook so the
+    # `post_tool_use_pii_tokenize` handler can scrub PII from
+    # the subagent's return summary, and `post_tool_use_clear_result`
+    # can move the full result off the active context.
+    _post = _hs.fire(HookContext(event=HookEvent.POST_TOOL_USE, payload={
+        "tool_name": "subagent_spawn",
+        "phase_id": args.phase,
+        "result": result.to_dsl(),
+    }))
+
     print("\n📋 Subagent Result:")
-    print(result.to_dsl())
+    if _post.decision == HookDecision.MODIFY and "tool_result" in (_post.modified_payload or {}):
+        # Hook returned a modified (PII-tokenized) version
+        print(_post.modified_payload["tool_result"])
+    else:
+        print(result.to_dsl())
     print(f"\n🛡️  Compression: {result.compression_ratio():.1f}× vs raw dump")
-    print(f"🔒 Isolation: {firewall.verify_isolation('sub_1')}")
+    # CRIT fix 2026-06-10: use firewall.last_sub_id instead of hard-coded
+    # 'sub_1' so the audit actually matches a real spawn record.
+    print(f"🔒 Isolation: {firewall.verify_isolation(firewall.last_sub_id)}")
 
 
 def main():
@@ -203,6 +260,37 @@ def main():
     p_spawn.set_defaults(func=cmd_spawn)
 
     args = parser.parse_args()
+    # CRIT fix 2026-06-10: every CLI invocation now verifies the
+    # audit chain on the relevant state DB (when one exists) and
+    # warns — but does not refuse to run — if the chain is broken.
+    # This is what makes F-004 (verify_audit_chain) operationally
+    # useful: it was added in v1.0.3 but never called from anywhere.
+    _audit_check_path = os.path.join(
+        getattr(args, "path", None) or ".ctxh", "state.db"
+    )
+    if args.cmd != "init" and os.path.exists(_audit_check_path):
+        try:
+            _st = StateDB(path=_audit_check_path)
+            _result = _st.verify_audit_chain()
+            if not _result.get("ok"):
+                print(
+                    f"⚠️  Audit chain check FAILED on {_audit_check_path}: "
+                    f"{_result.get('reason')} (id={_result.get('first_invalid_id')})"
+                )
+            elif _result.get("checked", 0) > 0:
+                print(
+                    f"🔍 Audit chain OK ({_result['checked']} events, "
+                    f"epoch={_result.get('epoch_id', '?')})"
+                )
+        except Exception as e:
+            print(f"⚠️  Audit chain check errored: {e}")
+
+    # HIGH fix 2026-06-10: wire the hook system. The 7 lifecycle
+    # hooks (PreToolUse / PostToolUse / Subagent* / Phase*) are
+    # defined in lib/hooks.py but the CLI never fired them. The
+    # `measure` and `spawn` subcommands now route their tool-call
+    # payloads through the hook system, so e.g. PII tokenization
+    # and destructive-command blocking run for real.
     args.func(args)
 
 

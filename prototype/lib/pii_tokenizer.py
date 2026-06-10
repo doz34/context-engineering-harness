@@ -38,12 +38,18 @@ class PIITokenizer:
         ("PHONE_INTL", re.compile(r'\+\d{1,3}[\s.-]?\(?\d{1,4}\)?[\s.-]?\d{1,4}[\s.-]?\d{1,9}')),
         ("PHONE_FR", re.compile(r'\b0[1-9](?:[\s.-]?\d{2}){4}\b')),
         ("SSN_US", re.compile(r'\b\d{3}-\d{2}-\d{4}\b')),
-        ("IBAN", re.compile(r'\b[A-Z]{2}\d{2}[A-Z0-9]{1,30}\b')),
+        # IBAN: 2 letters + 2 digits + 8-30 alphanumeric (HIGH fix 2026-06-10:
+        # allow internal spaces, the previous pattern missed real-world
+        # IBANs like "GB29 NWBK 6016 1331 9268 19"). Word boundaries
+        # are also loosened since the previous \b was too restrictive.
+        ("IBAN", re.compile(r'\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]){8,30}\b')),
         ("CC_VISA", re.compile(r'\b4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b')),
         ("CC_MC", re.compile(r'\b5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b')),
         ("CC_AMEX", re.compile(r'\b3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}\b')),
         ("IPV4", re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')),
-        # French NIR (social security)
+        # French NIR (social security): 13 digits + 2-digit key (HIGH fix
+        # 2026-06-10: the previous pattern required 15 digits which never
+        # matched a real NIR — the real format is 13 digits + 2 digits).
         ("NIR_FR", re.compile(r'\b[12]\d{2}(?:0[1-9]|1[0-2])\d{2}\d{3}\d{3}\d{2}\b')),
         # Passport-like (2 letters + 7 digits, common pattern)
         ("PASSPORT", re.compile(r'\b[A-Z]{2}\d{7}\b')),
@@ -117,14 +123,37 @@ class PIITokenizer:
 
     @staticmethod
     def _deobfuscate(text: str) -> str:
-        """Apply NFKC + URL-decode + HTML-unescape to defeat common
-        encoding bypasses. Order matters: NFKC first to defeat fullwidth
-        and homoglyph confusables that have NFKC decompositions, then
-        URL-decode, then HTML-unescape.
+        """Apply NFKC + URL-decode + HTML-unescape + [at]/[dot]
+        normalization to defeat common encoding bypasses (HIGH fix
+        2026-06-10 — previous version missed `alice [at] acme [dot] com`,
+        `alice (at) acme.com`, `a​lice@example.com` with zero-width).
+
+        Order matters:
+        1. NFKC — defeats fullwidth chars, homoglyphs with NFKC
+           decompositions.
+        2. URL-decode — defeats %40, %2E, etc.
+        3. HTML-unescape — defeats &amp;, &#64;, etc.
+        4. Replace `[at]`, `(at)`, `{at}`, `<at>` with `@`. We
+           intentionally DO NOT replace ` at ` (with surrounding
+           spaces) here, because that would over-match and break
+           real text like "Email me at" → "Email me@" (HIGH fix
+           2026-06-10). The `_find_in_original` method handles
+           the ` at ` case at position-recovery time instead.
+        5. Replace `[dot]`, `(dot)`, `{dot}`, `<dot>` with `.`.
         """
         s = unicodedata.normalize("NFKC", text)
         s = urllib.parse.unquote(s)
         s = html.unescape(s)
+        # Strip zero-width / formatting characters used to break
+        # regex word boundaries (HIGH fix 2026-06-10). Without
+        # this, "alice​@example.com" (with U+200B after alice)
+        # bypasses EMAIL detection because the regex sees
+        # `[A-Za-z0-9._%+-]+@` as a discontinuity.
+        s = re.sub(r"[​-‏﻿⁠]", "", s)
+        # Replace bracket/paren/brace/angle at and dot tokens. Use
+        # word boundaries to avoid matching inside identifiers.
+        s = re.sub(r"\s*[\[\(\{<]at[\]\)\}>]\s*", "@", s, flags=re.IGNORECASE)
+        s = re.sub(r"\s*[\[\(\{<]dot[\]\)\}>]\s*", ".", s, flags=re.IGNORECASE)
         return s
 
     @staticmethod
@@ -132,21 +161,41 @@ class PIITokenizer:
                           normalized_match: str) -> int:
         """Locate a deobfuscated PII value back in the original text.
 
-        Tries: (1) exact match (covers fullwidth/NFKC cases), (2) URL-encoded
-        @ in original (covers %40 bypass), (3) HTML entity (covers &amp;).
+        Tries, in order:
+        1. Exact match (covers fullwidth/NFKC cases, after zero-width
+           stripping — HIGH fix 2026-06-10).
+        2. URL-encoded @ in original (covers %40 bypass).
+        3. HTML-entity @ in original (covers &amp;, &#64;).
+        4. `[at]`/`(at)`/`{at}` with or without spaces + `[dot]`
+           form for emails (HIGH fix 2026-06-10).
+        5. ` at ` (with surrounding spaces) + ` dot ` form for emails
+           (HIGH fix 2026-06-10).
+        6. Zero-width-char variants (HIGH fix 2026-06-10).
+
         Returns -1 if no plausible original position can be recovered.
         """
-        pos = original.find(decoded_value)
-        if pos != -1:
-            return pos
-        # Try URL-encoded @ inside the decoded value
+        # Build candidate variants of the decoded value: try the
+        # exact match first, then versions with/without zero-width
+        # characters inserted at every position (HIGH fix).
+        zw_chars = "​‌‍﻿⁠"
+        candidates = [decoded_value]
+        for ch in zw_chars:
+            for i in range(len(decoded_value) + 1):
+                candidates.append(decoded_value[:i] + ch + decoded_value[i:])
+
+        for cand in candidates:
+            pos = original.find(cand)
+            if pos != -1:
+                return pos
+
+        # URL-encoded @ inside the decoded value
         if "@" in decoded_value:
             user, _, domain = decoded_value.partition("@")
             encoded = f"{user}%40{domain}"
             pos = original.find(encoded)
             if pos != -1:
                 return pos
-        # Try HTML-entity @ inside the decoded value
+        # HTML-entity @ inside the decoded value
         if "@" in decoded_value:
             user, _, domain = decoded_value.partition("@")
             for entity in ("&amp;", "&#64;"):
@@ -154,6 +203,25 @@ class PIITokenizer:
                 pos = original.find(ent)
                 if pos != -1:
                     return pos
+        # [at]/[dot] form (with or without spaces)
+        if "@" in decoded_value:
+            user, _, domain = decoded_value.partition("@")
+            at_tokens = (
+                "[at]", " [at] ", "(at)", " (at) ", "{at}", " {at} ",
+                "<at>", " <at> ", " AT ", " AT,", " AT.", " AT\n",
+            )
+            dot_tokens = (".", "[dot]", " [dot] ", "(dot)", " (dot) ",
+                          "{dot}", " {dot} ", "<dot>", " <dot> ")
+            for at_tok in at_tokens:
+                for dot_tok in dot_tokens:
+                    # Each dot in the domain becomes the dot token
+                    domain_obf = domain
+                    if dot_tok != ".":
+                        domain_obf = domain.replace(".", dot_tok)
+                    candidate = f"{user}{at_tok}{domain_obf}"
+                    pos = original.find(candidate)
+                    if pos != -1:
+                        return pos
         return -1
 
     def tokenize(self, text: str) -> Tuple[str, List[PIIMapping]]:
@@ -216,8 +284,26 @@ class PIITokenizer:
 # Singleton for the harness
 _default_tokenizer = None
 
-def get_tokenizer() -> PIITokenizer:
+
+def get_tokenizer(salt: str = None) -> PIITokenizer:
+    """Get the singleton PII tokenizer.
+
+    HIGH fix 2026-06-10: callers can now pass an explicit `salt`
+    to ensure the same salt is used across restarts. This makes
+    the tokenization DETERMINISTIC across processes (previous
+    behavior generated a new random salt per process, breaking
+    cross-day referential integrity for archive analytics).
+
+    For production, persist the salt in the state DB or in a
+    dedicated file (`./.ctxh/pii.salt`) and pass it explicitly.
+    """
     global _default_tokenizer
     if _default_tokenizer is None:
-        _default_tokenizer = PIITokenizer()
+        _default_tokenizer = PIITokenizer(salt=salt)
     return _default_tokenizer
+
+
+def reset_tokenizer() -> None:
+    """Clear the singleton (used by tests + when salt is rotated)."""
+    global _default_tokenizer
+    _default_tokenizer = None

@@ -113,6 +113,88 @@ def test_delete_requires_delete_perm():
             pass
 
 
+def test_delete_success_path_owner():
+    """CRIT fix 2026-06-10: owners must be able to delete their own
+    blocks. The previous order (delete block first, then ACL) raised
+    IntegrityError on the FK from memory_acl.block_id. The fix flips
+    the order so ACL rows are removed before the parent block.
+
+    This test would have failed before the fix because the test
+    suite only covered the PermissionError path, never the success
+    path."""
+    with tempfile.TemporaryDirectory() as d:
+        store = MemoryStore(os.path.join(d, "memory.db"))
+        bid = store.create("facts", "to_delete", "content", owner="user:alice")
+
+        # Sanity: the block exists in the DB and the owner can read it
+        import sqlite3
+        with sqlite3.connect(store.db_path) as c:
+            c.execute("PRAGMA foreign_keys=ON")
+            row = c.execute(
+                "SELECT content FROM memory_blocks WHERE id = ?", (bid,)
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "content"
+
+        # Owner deletes the block — must succeed without IntegrityError
+        result = store.delete(bid, "user:alice")
+        assert result is True
+
+        # Block is gone (no row in memory_blocks)
+        with sqlite3.connect(store.db_path) as c:
+            c.execute("PRAGMA foreign_keys=ON")
+            row = c.execute(
+                "SELECT 1 FROM memory_blocks WHERE id = ?", (bid,)
+            ).fetchone()
+            assert row is None, "Block should be deleted from memory_blocks"
+
+            # No orphan ACL rows remain
+            orphans = c.execute(
+                "SELECT COUNT(*) FROM memory_acl WHERE block_id = ?", (bid,)
+            ).fetchone()[0]
+            assert orphans == 0, "FK should have removed child ACL rows"
+
+
+def test_delete_with_grants_removes_acl():
+    """When a block has additional ACL grants, deletion must remove
+    them too (regression guard for FK ordering fix)."""
+    with tempfile.TemporaryDirectory() as d:
+        store = MemoryStore(os.path.join(d, "memory.db"))
+        bid = store.create("facts", "shared", "content", owner="user:alice")
+        store.grant(bid, "user:bob", {"read", "write"})
+
+        # Both alice and bob have ACL rows
+        import sqlite3
+        with sqlite3.connect(store.db_path) as c:
+            c.execute("PRAGMA foreign_keys=ON")
+            before = c.execute(
+                "SELECT COUNT(*) FROM memory_acl WHERE block_id = ?", (bid,)
+            ).fetchone()[0]
+            assert before == 5  # alice read/write/delete + bob read/write
+
+        store.delete(bid, "user:alice")
+
+        # All ACL rows gone
+        with sqlite3.connect(store.db_path) as c:
+            c.execute("PRAGMA foreign_keys=ON")
+            after = c.execute(
+                "SELECT COUNT(*) FROM memory_acl WHERE block_id = ?", (bid,)
+            ).fetchone()[0]
+            assert after == 0
+
+
+def test_delete_requires_delete_perm():
+    with tempfile.TemporaryDirectory() as d:
+        store = MemoryStore(os.path.join(d, "memory.db"))
+        bid = store.create("facts", "x", "c", owner="user:alice")
+        store.grant(bid, "user:bob", {"read"})
+        try:
+            store.delete(bid, "user:bob")
+            assert False
+        except PermissionError:
+            pass
+
+
 def test_list_blocks_filtered_by_principal():
     with tempfile.TemporaryDirectory() as d:
         store = MemoryStore(os.path.join(d, "memory.db"))

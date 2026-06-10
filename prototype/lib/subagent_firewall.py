@@ -83,6 +83,13 @@ class SubagentFirewall:
         self.ledger = ledger
         self.phase_id = phase_id
         self._subagent_id = 0
+        self.last_sub_id: Optional[str] = None  # exposed for callers
+                                              # needing to verify the
+                                              # most recent spawn (CRIT
+                                              # fix 2026-06-10 — the
+                                              # CLI demo previously
+                                              # hard-coded 'sub_1' which
+                                              # never matched).
 
     def spawn(self, brief: SubagentBrief,
               context_budget: int = 4000,
@@ -101,6 +108,7 @@ class SubagentFirewall:
 
         self._subagent_id += 1
         sub_id = f"{self.phase_id}_sub_{self._subagent_id}"
+        self.last_sub_id = sub_id  # expose for callers
 
         # Record spawn event
         self.ledger.record(
@@ -128,7 +136,15 @@ class SubagentFirewall:
 
     def _stub_execute(self, brief: SubagentBrief, sub_id: str,
                       model: str, budget: int) -> SubagentResult:
-        """Stub for POV demo. Replace with real LLM call."""
+        """Reference stub for POV demo (not a real isolation boundary).
+
+        In production, replace with a real LLM call inside a sandboxed
+        execution environment (Docker, gVisor, Firecracker). This stub
+        demonstrates the *contract* (summary-only return, no parent
+        context, budget tracking) without actual LLM isolation. The
+        architectural pattern is sound; the runtime enforcement is
+        aspirational for v1 (see audit/09-integral-analysis-council).
+        """
         # Simulate: brief → fake result
         return SubagentResult(
             summary=f"[STUB] Completed task: {brief.OBJECT[:50]}...",
