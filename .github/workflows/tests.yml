@@ -79,7 +79,7 @@ jobs:
       run: |
         cd prototype
         bash bin/ctxh-demo 2>&1 | tee /tmp/demo.out
-        if grep -q "is_valid: True" /tmp/demo.out; then
+        if grep -qE "'is_valid': True|is_valid: True" /tmp/demo.out; then
           echo "✅ Demo e2e audit passed"
         else
           echo "❌ Demo e2e audit did NOT show is_valid: True — see /tmp/demo.out"
