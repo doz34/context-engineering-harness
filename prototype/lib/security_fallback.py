@@ -34,8 +34,8 @@ def aes_ctr_hmac_encrypt(key: bytes, plaintext: bytes) -> bytes:
     return nonce + ct + mac
 
 
-def aes_ctr_hmac_decrypt(key: bytes, blob: bytes) -> str:
-    """Decrypt blob = nonce(16) + ct + mac(32)."""
+def aes_ctr_hmac_decrypt(key: bytes, blob: bytes) -> bytes:
+    """Decrypt blob = nonce(16) + ct + mac(32). Returns plaintext bytes."""
     if len(blob) < 16 + 32:
         raise ValueError("Blob too short")
     nonce, mac = blob[:16], blob[-32:]
@@ -49,9 +49,8 @@ def aes_ctr_hmac_decrypt(key: bytes, blob: bytes) -> str:
     if not _hmac.compare_digest(expected_mac, mac):
         raise ValueError("MAC verification failed (tampering or wrong key)")
 
-    # Decrypt
-    pt = _stream_encrypt(enc_key, nonce, ct)  # CTR is symmetric
-    return pt.decode()
+    # Decrypt (CTR is symmetric — re-encrypt ciphertext with same keystream)
+    return _stream_encrypt(enc_key, nonce, ct)
 
 
 def _stream_encrypt(key: bytes, nonce: bytes, data: bytes) -> bytes:

@@ -318,8 +318,13 @@ def test_no_secrets_in_clean_workflow():
 # === END-TO-END FILE VALIDATION ===
 
 def test_validate_github_workflow_file():
-    """End-to-end: load and validate a GitHub workflow YAML file."""
-    import yaml
+    """End-to-end: load and validate a GitHub workflow YAML file.
+
+    Skips cleanly when pyyaml is not installed (yaml is an optional dep
+    in ci_cd_pinning — the rest of the test suite must work stdlib-only).
+    """
+    pytest = __import__("pytest")
+    yaml = pytest.importorskip("yaml")
     with tempfile.TemporaryDirectory() as d:
         wf_path = os.path.join(d, "workflow.yml")
         wf_content = {
@@ -337,16 +342,10 @@ def test_validate_github_workflow_file():
         with open(wf_path, "w") as f:
             yaml.dump(wf_content, f)
 
-        # Need to inline the import (yaml is optional in ci_cd_pinning)
-        try:
-            import yaml
-            with open(wf_path) as f:
-                config = yaml.safe_load(f)
-            r = validate_github_workflow(config)
-            assert r.is_valid
-        except ImportError:
-            # yaml not available, skip
-            pass
+        with open(wf_path) as f:
+            config = yaml.safe_load(f)
+        r = validate_github_workflow(config)
+        assert r.is_valid
 
 
 if __name__ == "__main__":
