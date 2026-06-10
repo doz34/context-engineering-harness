@@ -35,12 +35,12 @@ ctxh = "lib.cli:main"
 where = ["prototype"]
 
 [tool.pytest.ini_options]
-testpaths = ["prototype/tests"]
+testpaths = ["tests"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
-source = ["prototype/lib"]
+source = ["lib"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 78
 show_missing = true

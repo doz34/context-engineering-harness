@@ -52,11 +52,10 @@ jobs:
         cd prototype
         python -m pytest tests/ -v
 
-    - name: Coverage gate (v1.1: 78% minimum)
+    - name: "Coverage gate - v1.1 78% minimum"
       # Refuses the build if lib/ coverage falls below 78%. New v1.1
-      # modules (encrypted_state, llm_view, observability, cli) have
-      # dedicated tests but some paths require cryptography or
-      # subprocess isolation not available in all CI runners.
+      # modules have dedicated tests but some paths require cryptography
+      # or subprocess isolation not available in all CI runners.
       run: |
         cd prototype
         python -m pytest tests/ --cov=lib --cov-report=term-missing --cov-fail-under=78
@@ -70,7 +69,7 @@ jobs:
       run: |
         bash prototype/bin/install.sh
 
-    - name: Run demo (CRIT fix 2026-06-10: assert e2e passes)
+    - name: "Run demo - assert e2e passes"
       # The demo's spawn-and-verify path now uses
       # firewall.last_sub_id (not hard-coded 'sub_1'), and an
       # end-to-end test asserts is_valid: True. This step greps
