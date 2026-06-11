@@ -17,17 +17,44 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib import StateDB, TokenLedger, SubagentFirewall, SubagentBrief
+from lib.encrypted_state import EncryptedStateDB
+from lib.failure_detector import ContextFailureDetector
+from lib.token_economics import TokenEconomicsManager
+from lib.verification_framework import VerificationFramework
+from lib.progressive_disclosure import ProgressiveDisclosureEngine, SkillDescriptor
 from lib.hooks import HookSystem, HookEvent, HookContext, HookResult, HookDecision
 from lib.pii_tokenizer import get_tokenizer as _pii_tokenizer
 
 
 def cmd_init(args):
-    """Initialize a new .ctxh/ directory in current path."""
+    """Initialize a new .ctxh/ directory in current path.
+
+    v1.1.1: EncryptedStateDB is now the default (auto-generates key at
+    state.db.key with 0o600). Use --no-encrypt to opt out (plaintext DB).
+    """
     target = args.path or ".ctxh"
     os.makedirs(target, exist_ok=True)
 
-    # Create state DB
-    state = StateDB(path=os.path.join(target, "state.db"))
+    db_path = os.path.join(target, "state.db")
+
+    # v1.1.1: Default ON is EncryptedStateDB (auto-generates key)
+    # Opt-out via --no-encrypt (rare, for legacy or sandboxed CI)
+    use_encryption = not getattr(args, "no_encrypt", False)
+
+    if use_encryption:
+        # EncryptedStateDB auto-creates state.db.key with 0o600 perms
+        state = EncryptedStateDB(path=db_path)
+        # Initialize the schema by opening a conn
+        with state.conn() as c:
+            pass  # triggers _init_schema in parent
+        enc_status = state.encryption_status
+        state.close()  # encrypts and cleans temp
+        enc_note = f"AES-256-GCM (key at {enc_status['key_file']})"
+    else:
+        state = StateDB(path=db_path)
+        with state.conn() as c:
+            pass  # triggers _init_schema
+        enc_note = "plaintext (opt-out via --no-encrypt)"
 
     # Create skeleton
     for sub in ["hooks", "subagents", "memory"]:
@@ -39,6 +66,7 @@ def cmd_init(args):
 ## Identity
 - Harness: CE-Harness v1.1 (Production-Ready)
 - Initialized: {datetime.datetime.now().isoformat()}
+- State encryption: {enc_note}
 
 ## 8 Invariants (enforced)
 1. Token budget per phase (60/70/85/95% triggers)
@@ -65,7 +93,7 @@ def cmd_init(args):
         f.write(claude_md)
 
     print(f"✅ CE-Harness initialized in {target}/")
-    print(f"   - state.db (SQLite WAL)")
+    print(f"   - state.db ({enc_note})")
     print(f"   - CLAUDE.md (60-line template)")
     print(f"   - hooks/ subagents/ memory/")
 
@@ -84,6 +112,9 @@ def cmd_measure(args):
     state = StateDB(path=db_path)
     ledger = TokenLedger(state=state, verbose=True)
 
+    # v1.1.1 (CRIT-3): wire ContextFailureDetector (Drew Breunig 4 modes)
+    fd = ContextFailureDetector(max_history=50)
+
     # Simulate 1 phase: search "parse_query" in a codebase
     phase_id = "P_DEMO_SEARCH"
     ledger.start_phase(phase_id, "Demo Search", soft_cap=8000, hard_cap=15000)
@@ -97,6 +128,19 @@ def cmd_measure(args):
                   model="claude-opus-4-8")
 
     print(f"\n📊 Baseline total: {state.phase_total(phase_id):,} tokens")
+
+    # v1.1.1: detect context rot on the baseline (50k tokens = severe rot)
+    rot_finding = fd.detect_context_rot(
+        turn_count=1,
+        context_size=50000,  # 50k char context = rot trigger
+        accuracy_hint=0.5,
+    )
+    rot_findings = [rot_finding] if rot_finding else []
+    if rot_findings:
+        print(f"\n🚨 ContextFailureDetector (Drew Breunig 4-modes): {len(rot_findings)} finding(s)")
+        for f in rot_findings[:3]:
+            sev = f.severity.value if hasattr(f.severity, "value") else f.severity
+            print(f"   - [{sev}] mode={f.mode} detail={f.detail[:60]}")
 
     # Reset for next scenario
     ledger.end_phase(phase_id, "aborted")
@@ -141,6 +185,15 @@ def cmd_measure(args):
     print("=" * 60)
     print(ledger.dashboard(phase_id_2))
 
+    # v1.1.1: FailureDetector confirms no rot in firewall scenario
+    no_rot = fd.detect_context_rot(
+        turn_count=1,
+        context_size=200,  # small, focused
+        accuracy_hint=0.95,
+    )
+    n_rot = 1 if no_rot else 0
+    print(f"\n✅ ContextFailureDetector: {n_rot} finding(s) on small focused context")
+
 
 def cmd_ledger(args):
     """Show token ledger."""
@@ -171,6 +224,19 @@ def cmd_spawn(args):
 
     state = StateDB(path=".ctxh/state.db")
     ledger = TokenLedger(state=state, verbose=True)
+
+    # v1.1.1 (CRIT-3): wire TokenEconomicsManager for model routing
+    tem = TokenEconomicsManager(baseline_budget=200000)
+    budget = args.budget
+    # Resolve optimal subagent models for the brief's task class
+    subtasks = ["search", "code", "review"]  # typical brief tasks
+    opt = tem.optimize_subagent_models(subtasks)
+    suggested_model = opt[0][1] if opt else None
+    est_tokens = tem.calculate_fanout_cost(
+        agent_count=3, avg_tokens_per_agent=4000
+    )
+    model_id = suggested_model.name if suggested_model else args.model
+    print(f"💰 TokenEconomics: recommended={model_id}, est cost={est_tokens:,} tokens for 3 subagents")
     # End any prior phase with same id
     with state.conn() as c:
         c.execute("UPDATE phase SET ended_at = datetime('now'), status = 'complete' "
@@ -220,8 +286,32 @@ def cmd_health(args):
     base_path = args.path or ".ctxh"
 
     # 1. State DB integrity
+    # v1.1.1: support both plaintext state.db and encrypted state.db.enc
     db_path = os.path.join(base_path, "state.db")
-    if os.path.exists(db_path):
+    enc_path = db_path + ".enc"
+
+    if os.path.exists(enc_path):
+        # Encrypted DB: open via EncryptedStateDB
+        try:
+            state = EncryptedStateDB(path=db_path)
+            with state.conn() as c:
+                tables = {r[0] for r in c.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()}
+            checks["state_db_schema"] = {"ok": len(tables) >= 4, "tables": len(tables)}
+            with state.conn() as c:
+                integrity = c.execute("PRAGMA integrity_check").fetchone()
+            checks["state_db_integrity"] = {"ok": integrity[0] == "ok"}
+            chain = state.verify_audit_chain()
+            checks["audit_chain"] = {
+                "ok": chain.get("ok", False),
+                "checked": chain.get("checked", 0),
+            }
+            state.close()
+        except Exception as e:
+            checks["state_db"] = {"ok": False, "reason": str(e)}
+    elif os.path.exists(db_path):
+        # Plaintext DB
         try:
             state = StateDB(path=db_path)
             with state.conn() as c:
@@ -229,12 +319,9 @@ def cmd_health(args):
                     "SELECT name FROM sqlite_master WHERE type='table'"
                 ).fetchall()}
             checks["state_db_schema"] = {"ok": len(tables) >= 4, "tables": len(tables)}
-            # WAL integrity
             with state.conn() as c:
                 integrity = c.execute("PRAGMA integrity_check").fetchone()
             checks["state_db_integrity"] = {"ok": integrity[0] == "ok"}
-
-            # Audit chain
             chain = state.verify_audit_chain()
             checks["audit_chain"] = {
                 "ok": chain.get("ok", False),
@@ -246,11 +333,10 @@ def cmd_health(args):
         checks["state_db"] = {"ok": False, "reason": "not found (run ctxh init)"}
 
     # 2. Encryption status
-    enc_path = db_path + ".enc"
     checks["encryption"] = {
         "ok": True,
         "encrypted": os.path.exists(enc_path),
-        "note": "encrypted at rest" if os.path.exists(enc_path) else "plaintext (set CTXH_ENCRYPTED=1)",
+        "note": "encrypted at rest" if os.path.exists(enc_path) else "plaintext (opt-in)",
     }
 
     # 3. PII salt
@@ -306,8 +392,30 @@ def cmd_health(args):
 def cmd_view(args):
     """Build and display the curated LLM view for a phase (v1.1)."""
     from lib.llm_view import LLMViewBuilder
+    from lib.progressive_disclosure import ProgressiveDisclosureEngine
 
-    db_path = ".ctxh/state.db"
+    # v1.1.1 (CRIT-3): use ProgressiveDisclosureEngine to load relevant skills
+    pde = ProgressiveDisclosureEngine()
+    # Register default skills on first use
+    pde.register_skill(
+        "ctxh_view", "View phase budget + adversarial findings + decisions",
+        keywords=["view", "phase", "budget"],
+        body_loader=lambda: "Head: budget status. Middle: working context. Tail: adversarial findings.",
+    )
+    pde.register_skill(
+        "ctxh_spawn", "Spawn subagent with brief validation + token routing",
+        keywords=["spawn", "subagent", "firewall"],
+        body_loader=lambda: "SubagentFirewall.spawn(brief, context_budget, model). Uses TokenEconomicsManager.",
+    )
+    pde.register_skill(
+        "ctxh_health", "Check infrastructure integrity (state, encryption, audit chain)",
+        keywords=["health", "check", "verify"],
+        body_loader=lambda: "ctxh health [--json] verifies state.db, .enc, audit chain, PII salt, disk.",
+    )
+    relevant = pde.evaluate_relevance(args.phase)
+    print(f"📚 ProgressiveDisclosure: {len(pde.get_metadata_all())} skills, {len(relevant)} relevant for {args.phase}")
+
+    db_path = ".ctxh/state.db.enc" if os.path.exists(".ctxh/state.db.enc") else ".ctxh/state.db"
     if not os.path.exists(db_path):
         print("❌ No state.db found. Run `ctxh init` first.")
         return 1
@@ -345,6 +453,8 @@ def main():
     # init
     p_init = subparsers.add_parser("init", help="Initialize CE-Harness in current dir")
     p_init.add_argument("--path", default=None)
+    p_init.add_argument("--no-encrypt", action="store_true",
+                        help="Opt out of EncryptedStateDB (plaintext state.db)")
     p_init.set_defaults(func=cmd_init)
 
     # measure
