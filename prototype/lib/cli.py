@@ -375,7 +375,7 @@ def cmd_health(args):
     if getattr(args, "json", False):
         print(json.dumps({
             "status": "HEALTHY" if all_ok else "DEGRADED",
-            "version": "1.1.0",
+            "version": "1.1.1",
             "checks": checks,
         }, indent=2))
     else:
